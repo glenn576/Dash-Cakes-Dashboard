@@ -194,6 +194,68 @@ const ADAPTERS = {
     async status(env, h) { return { connected: false }; },
     async fetchRange(env, h, q) { throw new NotConfigured('rostering'); },
     async fetchMonthly(env, h, q) { return { months: [], cost: [] }; }
+  },
+
+  /* >>> ADAPTER 4: SHOPIFY - online store revenue
+     Contract:
+       status(env, h)          -> { connected, org, sandbox, lastSync }
+       fetchRange(env, h, q)   -> { revenue }   (subtotal ex-tax, AUD)
+       fetchMonthly(env, h, q) -> { months:[...], revenue:[...] }
+     Secrets: SHOPIFY_SHOP (e.g. dashcakes.myshopify.com), SHOPIFY_ACCESS_TOKEN
+     Scopes needed: read_orders
+  */
+  shopify: {
+    configured: false,
+    auth: null,
+    oauth: {},
+    async status(env, h) {
+      try {
+        const shop = env.SHOPIFY_SHOP;
+        const token = env.SHOPIFY_ACCESS_TOKEN;
+        if (!shop || !token) return { connected: false };
+        const res = await fetch(`https://${shop}/admin/api/2024-01/shop.json`, {
+          headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }
+        });
+        if (!res.ok) return { connected: false };
+        const data = await res.json();
+        return { connected: true, org: data.shop ? data.shop.name : shop, sandbox: false, lastSync: null };
+      } catch (e) { return { connected: false, error: e.message }; }
+    },
+    async fetchRange(env, h, q) {
+      const shop = env.SHOPIFY_SHOP;
+      const token = env.SHOPIFY_ACCESS_TOKEN;
+      if (!shop || !token) throw new NotConfigured('shopify');
+      let revenue = 0;
+      let pageInfo = null;
+      let url = `https://${shop}/admin/api/2024-01/orders.json?status=closed&financial_status=paid&created_at_min=${q.from}T00:00:00%2B10:00&created_at_max=${q.to}T23:59:59%2B10:00&limit=250&fields=subtotal_price`;
+      while (true) {
+        const res = await fetch(pageInfo ? pageInfo : url, {
+          headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }
+        });
+        if (!res.ok) throw new Error('Shopify orders API error ' + res.status);
+        const data = await res.json();
+        const orders = data.orders || [];
+        for (const o of orders) revenue += parseFloat(o.subtotal_price || '0');
+        const link = res.headers.get('Link') || '';
+        const next = link.match(/<([^>]+)>;\s*rel="next"/);
+        if (!next) break;
+        pageInfo = next[1];
+      }
+      return { revenue };
+    },
+    async fetchMonthly(env, h, q) {
+      const months = [];
+      const revenue = [];
+      const ms = _monthRange(q.from, q.to);
+      for (const m of ms) {
+        const lastDay = new Date(+m.slice(0,4), +m.slice(5,7), 0).getDate();
+        try {
+          const r = await ADAPTERS.shopify.fetchRange(env, h, { from: m + '-01', to: m + '-' + lastDay });
+          months.push(m); revenue.push(r.revenue || 0);
+        } catch (e) { months.push(m); revenue.push(0); }
+      }
+      return { months, revenue };
+    }
   }
 };
 
@@ -689,7 +751,7 @@ async function monthlyIngested(env, source, fromMonth, toMonth) {
    The source's adapter.parseExport() turns it into day rows. */
 async function apiIngest(env, request, url) {
   const source = url.searchParams.get('source');
-  if (!['accounting', 'pos', 'rostering'].includes(source)) return json({ error: 'unknown source' }, 400);
+  if (!['accounting', 'pos', 'rostering', 'shopify'].includes(source)) return json({ error: 'unknown source' }, 400);
   const auth = request.headers.get('Authorization') || '';
   if (!env.INGEST_TOKEN || auth !== 'Bearer ' + env.INGEST_TOKEN) {
     return json({ error: 'not authorised', plain: 'That upload code didn\u2019t match. Check it with your AI and try again.' }, 401);
@@ -757,7 +819,7 @@ async function sourceStatus(env, source) {
 async function fetchSlot(env, q) {
   /* One period slot: pull each configured source; null where unavailable. */
   const out = {};
-  for (const source of ['accounting', 'pos', 'rostering']) {
+  for (const source of ['accounting', 'pos', 'rostering', 'shopify']) {
     const adapter = ADAPTERS[source];
     if (!adapter || !adapter.configured) { out[source] = null; continue; }
     try {
@@ -783,10 +845,11 @@ async function apiMetrics(env, url) {
   const rollover = Math.max(0, Math.min(6, parseInt(url.searchParams.get('rollover') || '0', 10) || 0));
 
   const base = { tz, rollover };
-  const [sAcc, sPos, sRos] = await Promise.all([
+  const [sAcc, sPos, sRos, sShop] = await Promise.all([
     sourceStatus(env, 'accounting'),
     sourceStatus(env, 'pos'),
-    sourceStatus(env, 'rostering')
+    sourceStatus(env, 'rostering'),
+    sourceStatus(env, 'shopify')
   ]);
 
   /* The provider calls (periods + trend) are the expensive part and the only
@@ -814,7 +877,7 @@ async function apiMetrics(env, url) {
     let trendOut = null;
     if (trend) {
       trendOut = { months: monthList(trend.fromMonth, trend.toMonth) };
-      for (const source of ['accounting', 'pos']) {
+      for (const source of ['accounting', 'pos', 'shopify']) {
         const adapter = ADAPTERS[source];
         if (!adapter || !adapter.configured) { trendOut[source] = null; continue; }
         try {
@@ -833,7 +896,7 @@ async function apiMetrics(env, url) {
   return json({
     generatedAt: data.generatedAt,
     protected: true,
-    sources: { accounting: sAcc, pos: sPos, rostering: sRos },
+    sources: { accounting: sAcc, pos: sPos, rostering: sRos, shopify: sShop },
     periods: data.periods,
     trend: data.trend
   });
@@ -893,7 +956,7 @@ export default {
       if (!loggedIn) return json({ error: 'auth' }, 401);
       return apiMetrics(env, url);
     }
-    const authRoute = /^\/auth\/(accounting|pos|rostering)\/(start|callback)$/.exec(path);
+    const authRoute = /^\/auth\/(accounting|pos|rostering|shopify)\/(start|callback)$/.exec(path);
     if (authRoute && request.method === 'GET') {
       if (!loggedIn) return Response.redirect(url.origin + '/', 302);
       return authRoute[2] === 'start' ? authStart(env, authRoute[1], url) : authCallback(env, authRoute[1], url);
@@ -901,7 +964,7 @@ export default {
     if (path === '/api/disconnect' && request.method === 'POST') {
       if (!loggedIn) return json({ error: 'auth' }, 401);
       const source = url.searchParams.get('source');
-      if (['accounting', 'pos', 'rostering'].includes(source)) {
+      if (['accounting', 'pos', 'rostering', 'shopify'].includes(source)) {
         await clearTokens(env, source);
         return json({ ok: true });
       }
@@ -913,7 +976,7 @@ export default {
   /* Cron rung: uncomment [triggers] in wrangler.toml and give any adapter a
      scheduledPull() to fetch its tool's own export on a schedule. */
   async scheduled(event, env, ctx) {
-    for (const source of ['accounting', 'pos', 'rostering']) {
+    for (const source of ['accounting', 'pos', 'rostering', 'shopify']) {
       const a = ADAPTERS[source];
       if (a && typeof a.scheduledPull === 'function') {
         try {
@@ -926,15 +989,7 @@ export default {
     }
   },
 
-  /* Email rung (Path B): the tool's own report scheduler emails its export;
-     the owner's domain on their Cloudflare routes that address here (Email
-     Routing -> this Worker). Complete when this rung is chosen:
-       1. parse the message with postal-mime (add the dependency)
-       2. find the CSV/report attachment, work out which source sent it
-          (sender address or subject)
-       3. reuse adapter.parseExport + saveIngestedRows + noteSync, exactly
-          like /api/ingest
-     Until then this logs and discards. */
+  /* Email rung (Path B): complete when this rung is chosen. */
   async email(message, env, ctx) {
     console.log('email received from ' + message.from + '; email ingest not wired yet');
   }

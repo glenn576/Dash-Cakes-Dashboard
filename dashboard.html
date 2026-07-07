@@ -154,6 +154,24 @@ body {
 .m-decision { font-size: 12px; color: var(--muted); font-weight: 300; line-height: 1.55; margin-top: 0.45rem; }
 .m-decision b { color: var(--text); font-weight: 500; }
 
+/* Metric tabs (sub-navigation inside dashboard view) */
+.metric-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 1.2rem; padding: 4px; background: var(--cream2); border-radius: 14px; }
+.metric-tab { font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500; padding: 7px 16px; border-radius: 10px; border: none; background: transparent; color: var(--muted); cursor: pointer; transition: all .15s; white-space: nowrap; }
+.metric-tab:hover { background: #fff; color: var(--black); }
+.metric-tab.active { background: #fff; color: var(--black); font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+
+/* Multi-source grid: side-by-side source columns */
+.source-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 1.5rem; }
+.source-col { background: #fffdf9; border: 1px solid var(--border); border-radius: 16px; padding: 1.3rem 1.4rem; }
+.source-col.not-conf { background: var(--cream2); border-style: dashed; }
+.source-col-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.source-col-name { font-family: 'Khand', sans-serif; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+.source-col-org { font-size: 11px; color: var(--muted); font-weight: 300; }
+.source-big { font-family: 'Khand', sans-serif; font-size: 46px; font-weight: 700; color: var(--black); line-height: 1; margin-bottom: 0.15rem; }
+.source-big.dim { color: var(--muted); font-size: 28px; }
+.source-sub { font-size: 13px; color: var(--muted); margin-bottom: 0.7rem; }
+.source-note { font-size: 11px; color: var(--muted); font-weight: 300; margin-top: 0.6rem; border-top: 1px solid var(--border); padding-top: 0.55rem; line-height: 1.55; }
+
 /* Sections shared */
 .screen-title { font-family: 'Khand', sans-serif; font-size: 26px; font-weight: 600; color: var(--black); margin: 0.4rem 0 0.3rem; }
 .screen-sub { font-size: 14px; color: var(--muted); font-weight: 300; line-height: 1.7; max-width: 640px; margin-bottom: 1.2rem; }
@@ -268,7 +286,8 @@ var KIT_CONFIG = {
   "providers": {
     "accounting": "Xero",
     "pos": "Square",
-    "rostering": "Connecteam"
+    "rostering": "Connecteam",
+    "shopify": "Shopify"
   },
   "metrics": [
     "revenue",
@@ -372,7 +391,8 @@ var CHOSEN = KIT_CONFIG.metrics.filter(function (k) { return METRIC_DEFS[k]; });
 
 var SOURCES = [
   { key: 'accounting', name: P.accounting, role: 'Money figures (' + KIT_CONFIG.taxLabel + ')' },
-  { key: 'pos',        name: P.pos,        role: 'Transaction count' }
+  { key: 'pos',        name: P.pos,        role: 'Transactions + Square revenue' },
+  { key: 'shopify',    name: P.shopify,    role: 'Online store revenue' }
 ];
 if (P.rostering) SOURCES.push({ key: 'rostering', name: P.rostering, role: 'Projected wages (optional)' });
 
@@ -481,6 +501,7 @@ function fmtRange(r) {
 ============================================================ */
 var state = {
   view: 'dashboard',           /* dashboard | connections | recon | settings */
+  metricTab: 'sales',          /* sales | cogs | profit | wages | acs | transactions */
   period: SETTINGS.defaultPeriod === 'custom' ? 'thisWeek' : SETTINGS.defaultPeriod,
   customFrom: null, customTo: null,
   loading: false,
@@ -586,6 +607,7 @@ function periodValues(slot) {  /* slot: 'cur' | 'prev' | 'yoy' */
   var acc = p.accounting || null;
   var pos = p.pos || null;
   var ros = p.rostering || null;
+  var shop = p.shopify || null;
   var out = {};
   if (acc) {
     out.revenue = num(acc.revenue);
@@ -593,8 +615,12 @@ function periodValues(slot) {  /* slot: 'cur' | 'prev' | 'yoy' */
     out.wagesSuper = num(acc.wagesSuper);
     out.overheads = num(acc.overheads);
   }
-  if (pos) out.count = num(pos.count);
+  if (pos) {
+    out.count = num(pos.count);
+    out.squareRevenue = num(pos.grossRevenue);  /* Square gross sales ex-GST */
+  }
   if (ros) out.rosteredCost = num(ros.cost);
+  if (shop) out.shopifyRevenue = num(shop.revenue);
   return out;
 }
 function num(v) { return (typeof v === 'number' && isFinite(v)) ? v : null; }
@@ -848,19 +874,15 @@ function renderDashboard(root) {
     if (!state.customFrom || !state.customTo) { root.appendChild(el('p', 'screen-sub', 'Pick a start and end date.')); return; }
   }
 
-  /* Freshness (or, in manual mode, an edit prompt) */
+  /* Freshness row */
   var fr = el('div', 'fresh-row');
   if (isManual()) {
     fr.innerHTML = 'Showing the numbers you entered.';
-    var eb = el('button', 'btn-plain', 'Add or edit numbers');
-    eb.style.padding = '5px 12px'; eb.style.fontSize = '12px';
-    eb.onclick = function () { state.view = 'enter'; render(); };
-    fr.appendChild(eb);
   } else if (state.loading) {
     fr.innerHTML = '<span class="spin"></span> Fetching your latest numbers…';
   } else {
     var when = state.fetchedAt ? state.fetchedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
-    fr.innerHTML = 'Updated ' + when + ' · updates when you open or refresh this page';
+    fr.innerHTML = 'Updated ' + when + ' · refreshes on open';
     var rb = el('button', 'btn-plain', 'Refresh');
     rb.style.padding = '5px 12px'; rb.style.fontSize = '12px';
     rb.onclick = function () { fetchData(true); };
@@ -870,21 +892,181 @@ function renderDashboard(root) {
 
   root.appendChild(el('div', 'period-heading', periodLabel() + ' <span>· ' + fmtRange(r) + '</span>'));
 
-  if (isManual() && !manualEntry({ from: r.from, to: r.to })) {
-    var mb = el('div', 'banner banner-amber');
-    mb.innerHTML = '<b>No numbers entered for this period yet.</b> Add them and your dashboard fills in straight away.';
-    mb.appendChild(document.createElement('br'));
-    var mbtn = el('button', 'btn-plain', 'Enter numbers for ' + periodLabel().toLowerCase());
-    mbtn.style.marginTop = '8px';
-    mbtn.onclick = function () { state.enterPeriod = state.period; state.view = 'enter'; render(); };
-    mb.appendChild(mbtn);
-    root.appendChild(mb);
+  /* Metric tab sub-navigation */
+  var METRIC_TABS = [
+    { key: 'sales',        label: 'Sales' },
+    { key: 'cogs',         label: 'Cost of goods' },
+    { key: 'profit',       label: 'Profit' },
+    { key: 'wages',        label: 'Wages' },
+    { key: 'acs',          label: 'Avg customer spend' },
+    { key: 'transactions', label: 'Transactions' }
+  ];
+  var mtNav = el('div', 'metric-tabs');
+  METRIC_TABS.forEach(function (mt) {
+    var btn = el('button', 'metric-tab' + (state.metricTab === mt.key ? ' active' : ''), mt.label);
+    btn.onclick = function () { state.metricTab = mt.key; render(); };
+    mtNav.appendChild(btn);
+  });
+  root.appendChild(mtNav);
+
+  var cur = periodValues('cur'), prev = periodValues('prev'), yoy = periodValues('yoy');
+
+  if (state.metricTab === 'sales')        renderSalesTab(root, cur, prev, yoy, r);
+  else if (state.metricTab === 'cogs')    renderSingleMetricTab(root, 'cogs', cur, prev, yoy, r);
+  else if (state.metricTab === 'profit')  renderSingleMetricTab(root, 'profit', cur, prev, yoy, r);
+  else if (state.metricTab === 'wages')   renderWagesTab(root, cur, prev, yoy, r);
+  else if (state.metricTab === 'acs')     renderSingleMetricTab(root, 'acs', cur, prev, yoy, r);
+  else if (state.metricTab === 'transactions') renderSingleMetricTab(root, 'transactions', cur, prev, yoy, r);
+}
+
+/* --- Sales tab: Xero / Square / Shopify side by side --- */
+function renderSalesTab(root, cur, prev, yoy, r) {
+  var d = state.data;
+  var grid = el('div', 'source-grid');
+
+  /* Helper: build one source column */
+  function sourceCol(title, orgName, value, prevVal, yoyVal, note, configured) {
+    var col = el('div', 'source-col' + (configured ? '' : ' not-conf'));
+    var hdr = el('div', 'source-col-header');
+    hdr.appendChild(el('span', 'source-col-name', title));
+    if (orgName) hdr.appendChild(el('span', 'source-col-org', orgName));
+    col.appendChild(hdr);
+    if (!configured) {
+      col.appendChild(el('div', 'source-big dim', 'Not connected'));
+      col.appendChild(el('div', 'source-note', 'Connect this source on the Connections screen to see figures here.'));
+      return col;
+    }
+    if (state.loading && !d) {
+      col.appendChild(el('div', 'source-big dim', '…'));
+      return col;
+    }
+    col.appendChild(el('div', 'source-big', value != null ? fmtMoney(value, false) : '—'));
+    /* Comparisons */
+    if (prevVal != null && value != null) {
+      var chg = prevVal !== 0 ? ((value - prevVal) / Math.abs(prevVal)) * 100 : null;
+      var row = el('div', 'cmp-row');
+      row.appendChild(el('span', 'cmp-lab', esc(r.prevLabel)));
+      var cv = el('span', 'cmp-val ' + (chg == null ? 'flat' : chg >= 0 ? 'good' : 'bad'));
+      cv.textContent = chg == null ? 'no data' : (chg >= 0 ? '▲ ' : '▼ ') + Math.abs(chg).toFixed(1) + '%';
+      row.appendChild(cv);
+      col.appendChild(row);
+    }
+    if (r.yoy && yoyVal != null && value != null) {
+      var chg2 = yoyVal !== 0 ? ((value - yoyVal) / Math.abs(yoyVal)) * 100 : null;
+      var row2 = el('div', 'cmp-row');
+      row2.appendChild(el('span', 'cmp-lab', esc(r.yoyLabel)));
+      var cv2 = el('span', 'cmp-val ' + (chg2 == null ? 'flat' : chg2 >= 0 ? 'good' : 'bad'));
+      cv2.textContent = chg2 == null ? 'no data' : (chg2 >= 0 ? '▲ ' : '▼ ') + Math.abs(chg2).toFixed(1) + '%';
+      row2.appendChild(cv2);
+      col.appendChild(row2);
+    }
+    /* Mini sparkline */
+    col.appendChild(salesSpark(title));
+    if (note) col.appendChild(el('div', 'source-note', note));
+    return col;
   }
 
-  /* Cards */
+  /* Xero */
+  var xeroOrg = (d && d.sources && d.sources.accounting && d.sources.accounting.org) ? d.sources.accounting.org : null;
+  var xeroConf = isConfigured('accounting');
+  grid.appendChild(sourceCol('Xero Revenue', xeroOrg, cur.revenue, prev && prev.revenue, yoy && yoy.revenue,
+    'Both cafes combined · ex-GST · from Xero P&L', xeroConf));
+
+  /* Square */
+  var squareOrg = (d && d.sources && d.sources.pos && d.sources.pos.org) ? d.sources.pos.org : null;
+  var squareConf = isConfigured('pos');
+  grid.appendChild(sourceCol('Square Sales', squareOrg, cur.squareRevenue, prev && prev.squareRevenue, yoy && yoy.squareRevenue,
+    'Gross sales ex-GST · live from Square', squareConf && cur.squareRevenue != null ? squareConf : false));
+
+  /* Shopify */
+  var shopOrg = (d && d.sources && d.sources.shopify && d.sources.shopify.org) ? d.sources.shopify.org : null;
+  var shopConf = isConfigured('shopify');
+  grid.appendChild(sourceCol('Shopify Revenue', shopOrg, cur.shopifyRevenue, prev && prev.shopifyRevenue, yoy && yoy.shopifyRevenue,
+    'Online orders · subtotal ex-tax', shopConf));
+
+  root.appendChild(grid);
+}
+
+function salesSpark(sourceTitle) {
+  var d = state.data;
+  if (!d || !d.trend) return el('div', '');
+  var months = d.trend.months || [];
+  if (!months.length) return el('div', '');
+  var series;
+  if (sourceTitle === 'Xero Revenue') series = (d.trend.accounting || {}).revenue;
+  else if (sourceTitle === 'Square Sales') series = (d.trend.pos || {}).grossRevenue;
+  else if (sourceTitle === 'Shopify Revenue') series = (d.trend.shopify || {}).revenue;
+  if (!series) return el('div', '');
+  return sparkBars(series, 'Revenue trend · 12 weeks');
+}
+
+/* --- Single metric tab (COGS, Profit, ACS, Transactions) --- */
+function renderSingleMetricTab(root, key, cur, prev, yoy, r) {
   var grid = el('div', 'cards');
-  var cur = periodValues('cur'), prev = periodValues('prev'), yoy = periodValues('yoy');
-  CHOSEN.forEach(function (k) { grid.appendChild(metricCard(k, cur, prev, yoy, r)); });
+  grid.appendChild(metricCard(key, cur, prev, yoy, r));
+  root.appendChild(grid);
+}
+
+/* --- Wages tab: Xero actual + Connecteam projected side by side --- */
+function renderWagesTab(root, cur, prev, yoy, r) {
+  var d = state.data;
+  var grid = el('div', 'source-grid');
+
+  function wageCol(title, orgName, dollars, pct, prevPct, yoyPct, note, configured) {
+    var col = el('div', 'source-col' + (configured ? '' : ' not-conf'));
+    var hdr = el('div', 'source-col-header');
+    hdr.appendChild(el('span', 'source-col-name', title));
+    if (orgName) hdr.appendChild(el('span', 'source-col-org', orgName));
+    col.appendChild(hdr);
+    if (!configured) {
+      col.appendChild(el('div', 'source-big dim', 'Not connected'));
+      col.appendChild(el('div', 'source-note', 'Connect this source on the Connections screen.'));
+      return col;
+    }
+    if (state.loading && !d) { col.appendChild(el('div', 'source-big dim', '…')); return col; }
+    col.appendChild(el('div', 'source-big', dollars != null ? fmtMoney(dollars, false) : '—'));
+    if (pct != null) col.appendChild(el('div', 'source-sub', pct.toFixed(1) + '% of revenue'));
+    if (prevPct != null && pct != null) {
+      var chg = pct - prevPct;
+      var row = el('div', 'cmp-row');
+      row.appendChild(el('span', 'cmp-lab', esc(r.prevLabel)));
+      var cv = el('span', 'cmp-val ' + (chg <= 0 ? 'good' : 'bad'));
+      cv.textContent = (chg <= 0 ? '▼ ' : '▲ ') + Math.abs(chg).toFixed(1) + ' pp';
+      row.appendChild(cv);
+      col.appendChild(row);
+    }
+    if (r.yoy && yoyPct != null && pct != null) {
+      var chg2 = pct - yoyPct;
+      var row2 = el('div', 'cmp-row');
+      row2.appendChild(el('span', 'cmp-lab', esc(r.yoyLabel)));
+      var cv2 = el('span', 'cmp-val ' + (chg2 <= 0 ? 'good' : 'bad'));
+      cv2.textContent = (chg2 <= 0 ? '▼ ' : '▲ ') + Math.abs(chg2).toFixed(1) + ' pp';
+      row2.appendChild(cv2);
+      col.appendChild(row2);
+    }
+    if (note) col.appendChild(el('div', 'source-note', note));
+    return col;
+  }
+
+  function wagePct(vals) {
+    if (!vals || vals.wagesSuper == null || vals.revenue == null || vals.revenue === 0) return null;
+    return (vals.wagesSuper / vals.revenue) * 100;
+  }
+  function rostPct(vals) {
+    if (!vals || vals.rosteredCost == null || vals.revenue == null || vals.revenue === 0) return null;
+    return (vals.rosteredCost / vals.revenue) * 100;
+  }
+
+  var xeroOrg = (d && d.sources && d.sources.accounting && d.sources.accounting.org) ? d.sources.accounting.org : null;
+  grid.appendChild(wageCol('Xero — Actual wages', xeroOrg,
+    cur.wagesSuper, wagePct(cur), wagePct(prev), wagePct(yoy),
+    'Wages + super · from Xero P&L · both cafes combined', isConfigured('accounting')));
+
+  var rosOrg = (d && d.sources && d.sources.rostering && d.sources.rostering.org) ? d.sources.rostering.org : null;
+  grid.appendChild(wageCol('Connecteam — Projected', rosOrg,
+    cur.rosteredCost, rostPct(cur), rostPct(prev), rostPct(yoy),
+    'Rostered cost · projected from current roster', isConfigured('rostering')));
+
   root.appendChild(grid);
 }
 
@@ -1102,6 +1284,39 @@ function attachBarTip(holder) {
     else { tip.style.opacity = '0'; }
   });
   holder.addEventListener('mouseleave', function () { barTipEl().style.opacity = '0'; });
+}
+
+/* Simple sparkline bars from a raw numeric array (used in source columns). */
+function sparkBars(vals, caption) {
+  var wrap = el('div', 'tbars');
+  wrap.appendChild(el('div', 'tbars-cap', caption || 'Trend · last 12 months'));
+  var nums = (vals || []).filter(function (x) { return x != null && x !== 0; });
+  if (!nums.length) { wrap.appendChild(el('div', 'notconf-msg', 'Trend fills in as data arrives.')); return wrap; }
+  var recent = (vals || []).slice(-12);
+  var maxv = Math.max.apply(null, recent.filter(function(x){return x!=null;}).concat([1]));
+  var W = 280, H = 46, NS = 'http://www.w3.org/2000/svg';
+  var gap = 3, bw = (W - gap * (recent.length - 1)) / recent.length;
+  var svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.style.cssText = 'display:block;width:100%;height:46px';
+  for (var i = 0; i < recent.length; i++) {
+    var v = recent[i] || 0;
+    var x = i * (bw + gap);
+    var barH = Math.max(2, (v / maxv) * H);
+    var rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('class', 'tbar good');
+    rect.setAttribute('x', x.toFixed(1));
+    rect.setAttribute('y', (H - barH).toFixed(1));
+    rect.setAttribute('width', bw.toFixed(1));
+    rect.setAttribute('height', barH.toFixed(1));
+    rect.setAttribute('rx', '1.5');
+    svg.appendChild(rect);
+  }
+  var holder = el('div', 'tbars-svg');
+  holder.appendChild(svg);
+  wrap.appendChild(holder);
+  return wrap;
 }
 
 /* 12-month history as bars, built as real namespaced SVG nodes (not via innerHTML)
@@ -1377,227 +1592,192 @@ var MANUAL_FIELDS = [
     help: 'Your wages and super total on the profit and loss for these dates.' },
   { key: 'overheads',  label: 'Overheads', kind: 'money',
     help: 'Operating expenses on the profit and loss for these dates, not counting wages, super or cost of sales.' },
-  { key: 'rosteredCost', label: 'Rostered wage cost (optional)', kind: 'money',
-    help: 'The rostered wage cost from your roster for these dates. Optional, it powers a projected wage percentage.' }
+  { key: 'rosteredCost', label: 'Rostered cost (' + (P.rostering || 'Rostering') + ')', kind: 'money',
+    help: 'The total rostered cost from your rostering tool for these dates (optional).' }
 ];
-var MANUAL_DEP = { revenue: ['revenue'], transactions: ['count'], acs: ['revenue', 'count'], cogs: ['cogs', 'revenue'], wage: ['wagesSuper', 'revenue'], overheads: ['overheads', 'revenue'], profit: ['revenue', 'cogs', 'wagesSuper', 'overheads'] };
-function manualNeededFieldKeys() {
-  var set = {};
-  CHOSEN.forEach(function (k) { (MANUAL_DEP[k] || []).forEach(function (f) { set[f] = true; }); });
-  var keys = [];
-  ['revenue', 'count', 'cogs', 'wagesSuper', 'overheads'].forEach(function (f) { if (set[f]) keys.push(f); });
-  if (KIT_CONFIG.providers.rostering && CHOSEN.indexOf('wage') >= 0) keys.push('rosteredCost');
-  return keys;
-}
 
+/* ---------- Manual entry ---------- */
 function renderManualEntry(root) {
-  root.appendChild(el('div', 'screen-title', 'Enter your numbers'));
-  root.appendChild(el('p', 'screen-sub', 'Type the figures from your own profit and loss and POS report. No accounts to connect and no code. Your dashboard fills in the moment you save, and it takes a couple of minutes each week.'));
+  root.appendChild(el('div', 'screen-title', 'Enter numbers'));
+  root.appendChild(el('p', 'screen-sub', 'Type in your figures for any period. They show on the Dashboard until a live connection replaces them.'));
 
-  var ep = state.enterPeriod || (state.period === 'custom' ? 'lastWeek' : state.period);
-  state.enterPeriod = ep;
-  var pbar = el('div', 'period-bar');
-  pbar.appendChild(el('span', 'period-label', 'Which dates'));
-  PERIODS.forEach(function (p) {
-    if (p.key === 'custom') return;
+  var ENTRY_PERIODS = PERIODS.filter(function (p) { return p.key !== 'custom'; });
+  var ep = state.enterPeriod || state.period;
+  if (ep === 'custom') ep = 'thisWeek';
+
+  var bar = el('div', 'period-bar');
+  bar.appendChild(el('span', 'period-label', 'Period'));
+  ENTRY_PERIODS.forEach(function (p) {
     var c = el('button', 'pchip' + (ep === p.key ? ' on' : ''), p.label);
     c.onclick = function () { state.enterPeriod = p.key; render(); };
-    pbar.appendChild(c);
+    bar.appendChild(c);
   });
-  root.appendChild(pbar);
+  root.appendChild(bar);
 
-  var r = resolvePeriod(ep);
-  root.appendChild(el('p', 'manual-dates', 'You are entering numbers for ' + fmtRange(r) + '.'));
+  var r = resolvePeriod(ep, null, null);
+  root.appendChild(el('div', 'period-heading', PERIODS.filter(function(x){return x.key===ep;})[0].label + ' <span>· ' + esc(fmtRange(r)) + '</span>'));
 
-  var existing = manualEntry({ from: r.from, to: r.to });
-  var vals = (existing && existing.values) ? existing.values : {};
-  var fields = manualNeededFieldKeys();
-  var inputs = {};
-  var grid = el('div', 'set-grid');
-  fields.forEach(function (fk) {
-    var fdef = MANUAL_FIELDS.filter(function (x) { return x.key === fk; })[0];
-    var cell = el('div', 'set-cell');
-    cell.appendChild(el('div', 'set-label', esc(fdef.label)));
-    var inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any'; inp.min = '0';
-    if (typeof vals[fk] === 'number') inp.value = vals[fk];
-    inp.placeholder = fdef.kind === 'int' ? 'e.g. 540' : (KIT_CONFIG.currency + ' amount');
-    inputs[fk] = inp;
-    cell.appendChild(inp);
-    cell.appendChild(el('div', 'set-note', esc(fdef.help)));
-    grid.appendChild(cell);
+  var saved = manualEntry({ from: r.from, to: r.to }) || {};
+  var form = el('div', 'set-section');
+
+  MANUAL_FIELDS.forEach(function (f) {
+    if (f.key === 'rosteredCost' && !P.rostering) return;
+    var row = el('div', 'set-row');
+    var label = el('label', 'set-label');
+    label.htmlFor = 'mf_' + f.key;
+    label.textContent = f.label;
+    row.appendChild(label);
+    var inp = document.createElement('input');
+    inp.id = 'mf_' + f.key;
+    inp.type = f.kind === 'int' ? 'number' : 'text';
+    inp.className = 'set-input';
+    inp.placeholder = f.kind === 'int' ? '0' : '0.00';
+    if (saved.values && saved.values[f.key] != null) inp.value = saved.values[f.key];
+    row.appendChild(inp);
+    if (f.help) row.appendChild(el('div', 'set-hint', f.help));
+    form.appendChild(row);
   });
-  root.appendChild(grid);
 
-  var att = el('div', 'manual-attest');
-  var cb = document.createElement('input'); cb.type = 'checkbox'; cb.id = 'attest';
-  if (existing && existing.attested) cb.checked = true;
-  var lab = document.createElement('label'); lab.htmlFor = 'attest';
-  lab.textContent = 'These figures are from my own profit and loss and POS report for these dates.';
-  att.appendChild(cb); att.appendChild(lab);
-  root.appendChild(att);
-
-  var errLine = el('div', 'err-line'); errLine.style.display = 'none';
-  root.appendChild(errLine);
-
-  var saveBtn = el('button', 'btn-primary-dash', 'Save these numbers');
+  var saveBtn = el('button', 'btn-save', 'Save these numbers');
   saveBtn.onclick = function () {
-    if (!cb.checked) { errLine.textContent = 'Please tick the box to confirm these are your own figures.'; errLine.style.display = 'block'; return; }
-    var newVals = {}; var any = false;
-    fields.forEach(function (fk) {
-      var raw = inputs[fk].value;
-      if (raw !== '' && isFinite(parseFloat(raw))) { newVals[fk] = parseFloat(raw); any = true; }
+    var vals = {};
+    MANUAL_FIELDS.forEach(function (f) {
+      var inp = document.getElementById('mf_' + f.key);
+      if (!inp) return;
+      var raw = inp.value.trim().replace(/[$,]/g, '');
+      if (raw === '') return;
+      var n = parseFloat(raw);
+      if (!isNaN(n)) vals[f.key] = n;
     });
-    if (!any) { errLine.textContent = 'Enter at least one number before saving.'; errLine.style.display = 'block'; return; }
-    MANUAL[rangeKey(r.from, r.to)] = { from: iso(r.from), to: iso(r.to), period: ep, values: newVals, attested: true, enteredAt: new Date().toISOString() };
+    var key = rangeKey(r.from, r.to);
+    MANUAL[key] = { from: r.from, to: r.to, period: ep, values: vals, attested: true, enteredAt: new Date().toISOString() };
     saveManual();
-    state.period = ep;
     state.view = 'dashboard';
-    fetchData();
+    state.period = ep;
+    state.data = null;
+    render();
   };
-  root.appendChild(saveBtn);
-  root.appendChild(el('p', 'set-note', 'After you save, open the Dashboard tab to see these numbers, how they compare to the period before, and where they need your attention.'));
+  form.appendChild(saveBtn);
 
-  var keys = Object.keys(MANUAL).sort().reverse();
-  if (keys.length) {
-    root.appendChild(el('div', 'section-sub', 'Saved so far'));
-    keys.forEach(function (k) {
-      var e = MANUAL[k];
-      root.appendChild(el('div', 'manual-row', esc(fmtRange({ from: fromIso(e.from), to: fromIso(e.to) })) + ' \u00b7 saved'));
-    });
+  if (saved.attested) {
+    var del = el('button', 'btn-plain', 'Clear these numbers');
+    del.style.marginLeft = '10px';
+    del.onclick = function () {
+      delete MANUAL[rangeKey(r.from, r.to)];
+      saveManual();
+      render();
+    };
+    form.appendChild(del);
   }
+
+  root.appendChild(form);
+  root.appendChild(el('p', 'set-note', 'After you save, open the Dashboard tab to see these numbers, how they compare to the period before, and where they need your attention.'));
 }
 
+/* ---------- Settings ---------- */
 function renderSettings(root) {
   root.appendChild(el('div', 'screen-title', 'Settings'));
-  root.appendChild(el('p', 'screen-sub', 'The bits you might want to change, with no code anywhere. Your AI set the rest up during the build.'));
 
-  root.appendChild(el('div', 'set-label', 'Where your numbers come from'));
-  var modeWrap = el('div', 'mode-wrap');
-  [ { k: 'manual', t: 'I type them in', d: 'Enter the numbers from your profit and loss and POS report each week. Works straight away, with nothing to connect.' },
-    { k: 'live', t: 'Connect my software', d: 'Your AI links your accounting and POS so the numbers update on their own. More to set up.' }
-  ].forEach(function (m) {
-    var mc = el('div', 'mode-card' + (SETTINGS.dataMode === m.k ? ' on' : ''));
-    mc.appendChild(el('div', 'mode-t', m.t));
-    mc.appendChild(el('div', 'mode-d', m.d));
-    mc.onclick = function () { SETTINGS.dataMode = m.k; saveSettings(); state.view = (m.k === 'manual' ? 'enter' : 'dashboard'); fetchData(); };
-    modeWrap.appendChild(mc);
-  });
-  root.appendChild(modeWrap);
-
-  var grid = el('div', 'set-grid');
-
-  var c1 = el('div', 'set-cell');
-  c1.appendChild(el('div', 'set-label', 'Venue name'));
-  var vn = document.createElement('input'); vn.type = 'text'; vn.value = SETTINGS.venueName; vn.maxLength = 60;
-  vn.onchange = function () { SETTINGS.venueName = vn.value || 'Your venue'; saveSettings(); render(); };
-  c1.appendChild(vn);
-  grid.appendChild(c1);
-
-  var c2 = el('div', 'set-cell');
-  c2.appendChild(el('div', 'set-label', 'Default period'));
-  var sel = document.createElement('select');
-  PERIODS.forEach(function (p) {
-    if (p.key === 'custom') return;
-    var o = document.createElement('option'); o.value = p.key; o.textContent = p.label;
-    if (SETTINGS.defaultPeriod === p.key) o.selected = true;
-    sel.appendChild(o);
-  });
-  sel.onchange = function () { SETTINGS.defaultPeriod = sel.value; saveSettings(); };
-  c2.appendChild(sel);
-  c2.appendChild(el('div', 'set-note', 'What the dashboard opens on.'));
-  grid.appendChild(c2);
-
-  var c3 = el('div', 'set-cell');
-  c3.appendChild(el('div', 'set-label', 'Week starts on'));
-  var ws = document.createElement('select');
-  var days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  days.forEach(function (d, i) {
-    var o = document.createElement('option'); o.value = i; o.textContent = d;
-    if (+SETTINGS.weekStart === i) o.selected = true;
-    ws.appendChild(o);
-  });
-  ws.onchange = function () { SETTINGS.weekStart = +ws.value; saveSettings(); fetchData(); };
-  c3.appendChild(ws);
-  grid.appendChild(c3);
-
-  var c4 = el('div', 'set-cell');
-  c4.appendChild(el('div', 'set-label', 'Trading day rolls over at'));
-  var ro = document.createElement('select');
-  for (var h = 0; h <= 6; h++) {
-    var o2 = document.createElement('option'); o2.value = h;
-    o2.textContent = (h === 0) ? 'Midnight (no rollover)' : (h + 'am');
-    if (+SETTINGS.rolloverHour === h) o2.selected = true;
-    ro.appendChild(o2);
+  function section(label) {
+    var s = el('div', 'set-section');
+    s.appendChild(el('div', 'section-sub', label));
+    return s;
   }
-  ro.onchange = function () { SETTINGS.rolloverHour = +ro.value; saveSettings(); fetchData(); };
-  c4.appendChild(ro);
-  c4.appendChild(el('div', 'set-note', 'If you trade past midnight, sales before this hour count to the previous day.'));
-  grid.appendChild(c4);
+  function row(labelText, inputEl, hint) {
+    var r = el('div', 'set-row');
+    var lbl = el('label', 'set-label', labelText);
+    r.appendChild(lbl);
+    r.appendChild(inputEl);
+    if (hint) r.appendChild(el('div', 'set-hint', hint));
+    return r;
+  }
+  function inp(type, val, onchange) {
+    var i = document.createElement('input');
+    i.type = type; i.value = val; i.className = 'set-input';
+    i.onchange = onchange;
+    return i;
+  }
+  function sel(opts, val, onchange) {
+    var s = document.createElement('select');
+    s.className = 'set-input';
+    opts.forEach(function (o) {
+      var opt = document.createElement('option');
+      opt.value = o.value != null ? o.value : o;
+      opt.textContent = o.label != null ? o.label : o;
+      if (opt.value === String(val)) opt.selected = true;
+      s.appendChild(opt);
+    });
+    s.onchange = onchange;
+    return s;
+  }
 
-  var c5 = el('div', 'set-cell');
-  c5.appendChild(el('div', 'set-label', 'Timezone'));
-  var tzSel = document.createElement('select');
-  (TZ_CHOICES[KIT_CONFIG.region] || [SETTINGS.timezone]).forEach(function (z) {
-    var o = document.createElement('option'); o.value = z; o.textContent = z.split('/')[1].replace('_', ' ');
-    if (SETTINGS.timezone === z) o.selected = true;
-    tzSel.appendChild(o);
+  /* Venue */
+  var vs = section('Your venue');
+  vs.appendChild(row('Venue name', inp('text', SETTINGS.venueName, function () { SETTINGS.venueName = this.value; saveSettings(); render(); })));
+  root.appendChild(vs);
+
+  /* Display */
+  var ds = section('Display');
+  ds.appendChild(row('Default period',
+    sel(PERIODS.filter(function(p){return p.key!=='custom';}), SETTINGS.defaultPeriod, function () { SETTINGS.defaultPeriod = this.value; saveSettings(); }),
+    'The period shown when you first open the dashboard.'));
+  ds.appendChild(row('Week starts',
+    sel([{value:'1',label:'Monday'},{value:'0',label:'Sunday'}], SETTINGS.weekStart, function () { SETTINGS.weekStart = parseInt(this.value); saveSettings(); fetchData(); })));
+
+  var tzOpts = (TZ_CHOICES[KIT_CONFIG.region] || ['Australia/Sydney']).map(function (z) { return { value: z, label: z }; });
+  ds.appendChild(row('Timezone', sel(tzOpts, SETTINGS.timezone, function () { SETTINGS.timezone = this.value; saveSettings(); fetchData(); })));
+  root.appendChild(ds);
+
+  /* Targets */
+  var ts = section('Targets (% of revenue)');
+  ['cogs','wage','overheads','profit'].forEach(function (k) {
+    var def = METRIC_DEFS[k];
+    if (!def || !def.dual) return;
+    var tRow = row(def.label + ' target (%)',
+      inp('number', SETTINGS.targets[k], function () {
+        SETTINGS.targets[k] = parseFloat(this.value) || 0;
+        saveSettings();
+      }),
+      'Alert shows when ' + def.label.toLowerCase() + (def.goodDir === 'down' ? ' exceeds' : ' falls below') + ' this %.');
+    ts.appendChild(tRow);
   });
-  tzSel.onchange = function () { SETTINGS.timezone = tzSel.value; saveSettings(); fetchData(); };
-  c5.appendChild(tzSel);
-  grid.appendChild(c5);
+  root.appendChild(ts);
 
-  var c6 = el('div', 'set-cell');
-  c6.appendChild(el('div', 'set-label', 'Accent colour'));
-  var sw = el('div', 'swatches');
+  /* Accent */
+  var as = section('Colour accent');
+  var ap = el('div', 'accent-picker');
   ACCENTS.forEach(function (a) {
-    var s = el('div', 'swatch' + (SETTINGS.accent === a.key ? ' on' : ''));
-    s.style.background = a.c;
-    s.title = a.key;
-    s.onclick = function () { SETTINGS.accent = a.key; saveSettings(); render(); };
-    sw.appendChild(s);
+    var sw = el('button', 'accent-swatch' + (SETTINGS.accent === a.key ? ' on' : ''));
+    sw.style.background = a.c;
+    sw.onclick = function () { SETTINGS.accent = a.key; saveSettings(); document.documentElement.style.setProperty('--accent', a.c); document.documentElement.style.setProperty('--accent-dim', a.dim); render(); };
+    ap.appendChild(sw);
   });
-  c6.appendChild(sw);
-  grid.appendChild(c6);
+  as.appendChild(ap);
+  root.appendChild(as);
 
-  root.appendChild(grid);
-
-  /* Targets and alerts (Monday-review thresholds) */
-  root.appendChild(el('div', 'screen-title', 'Targets and alerts'));
-  root.appendChild(el('p', 'screen-sub', 'Set the level you want each number to stay on the right side of. Cost and profit targets are a share of revenue (30 means 30% of revenue); transaction and spend targets are a plain number. A card flags amber when it slips to the wrong side. Revenue is shown against its own recent average instead of a fixed target.'));
-  var tgrid = el('div', 'set-grid');
-  CHOSEN.forEach(function (k) {
-    var mdef = METRIC_DEFS[k];
-    if (mdef.benchmark) return;
-    var cell = el('div', 'set-cell');
-    cell.appendChild(el('div', 'set-label', esc(mdef.label) + (mdef.dual ? ' (% of revenue)' : '')));
-    var inp = document.createElement('input'); inp.type = 'number'; inp.step = 'any';
-    inp.value = (SETTINGS.targets && typeof SETTINGS.targets[k] === 'number') ? SETTINGS.targets[k] : '';
-    inp.placeholder = (mdef.goodDir === 'down' ? 'alert if above' : 'alert if below');
-    inp.onchange = function () {
-      if (!SETTINGS.targets) SETTINGS.targets = {};
-      var val = parseFloat(inp.value);
-      if (isFinite(val)) SETTINGS.targets[k] = val; else delete SETTINGS.targets[k];
-      saveSettings(); render();
-    };
-    cell.appendChild(inp);
-    var unit = mdef.dual ? 'percent of revenue' : (mdef.fmt === 'int' ? 'count' : KIT_CONFIG.currency);
-    cell.appendChild(el('div', 'set-note', (mdef.goodDir === 'down' ? 'Alerts when above this ' : 'Alerts when below this ') + unit + '.'));
-    tgrid.appendChild(cell);
-  });
-  root.appendChild(tgrid);
-
-  if (!isManual()) {
-    root.appendChild(el('div', 'section-sub', 'Session'));
-    var logoutBtn = el('button', 'btn-plain', 'Log out');
-    logoutBtn.onclick = function () { fetch('/api/logout', { method: 'POST' }).then(function () { location.reload(); }); };
-    root.appendChild(logoutBtn);
+  /* Data mode */
+  if (KIT_CONFIG.startLevel !== 'live') {
+    var ms = section('Data mode');
+    ms.appendChild(el('p', 'set-note', 'Manual mode: numbers you enter on the Enter tab. Live mode: numbers pulled live from your connected tools.'));
+    var mb = el('div', 'set-row');
+    var mSel = sel([{value:'live',label:'Live (from your tools)'},{value:'manual',label:'Manual (you enter the numbers)'}], SETTINGS.dataMode, function () {
+      SETTINGS.dataMode = this.value; saveSettings(); fetchData();
+    });
+    mb.appendChild(mSel);
+    ms.appendChild(mb);
+    root.appendChild(ms);
   }
 }
 
 /* ============================================================
    Boot
 ============================================================ */
-state.period = SETTINGS.defaultPeriod || 'thisWeek';
+(function () {
+  var acc = ACCENTS.filter(function (a) { return a.key === SETTINGS.accent; })[0] || ACCENTS[0];
+  document.documentElement.style.setProperty('--accent', acc.c);
+  document.documentElement.style.setProperty('--accent-dim', acc.dim);
+})();
+
 render();
 fetchData();
 </script>
