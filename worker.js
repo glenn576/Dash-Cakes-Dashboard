@@ -169,13 +169,69 @@ const ADAPTERS = {
      POS_API_TOKEN); sandbox sign = token only answers on
      connect.squareupsandbox.com.
   */
+  /* >>> ADAPTER 2: POS - Square, personal access token
+     Contract:
+       fetchRange  -> { count }   completed transactions for the period
+       fetchMonthly-> { months, count }
+     Secret: POS_API_TOKEN  (Square production personal access token)
+  */
   pos: {
-    configured: false,
+    configured: true,
     auth: null,
     oauth: {},
-    async status(env, h) { return { connected: false }; },
-    async fetchRange(env, h, q) { throw new NotConfigured('pos'); },
-    async fetchMonthly(env, h, q) { throw new NotConfigured('pos'); }
+
+    async status(env, h) {
+      const token = env.POS_API_TOKEN;
+      if (!token) return { connected: false };
+      try {
+        const res = await fetch('https://connect.squareup.com/v2/merchants', {
+          headers: { 'Authorization': 'Bearer ' + token, 'Square-Version': '2024-01-18', 'Content-Type': 'application/json' }
+        });
+        if (res.status === 401) return { connected: false };
+        if (!res.ok) return { connected: false, error: 'Square API ' + res.status };
+        const data = await res.json();
+        const m = (data.merchant || [])[0] || {};
+        const org = m.business_name || m.id || 'Square';
+        const sandbox = !!token.match(/^EAAA.*sandbox/i) || !token.startsWith('EAAA');
+        return { connected: true, org, sandbox, lastSync: null };
+      } catch (e) { return { connected: false, error: e.message }; }
+    },
+
+    async fetchRange(env, h, q) {
+      const token = env.POS_API_TOKEN;
+      if (!token) throw new NotConfigured('pos');
+      /* Build timezone-aware timestamps (venue local midnight → midnight) */
+      const offset = _tzOffset(q.tz || 'Australia/Sydney');
+      const beginTime = q.from + 'T00:00:00' + offset;
+      const endTime   = q.to   + 'T23:59:59' + offset;
+      let count = 0, cursor = null;
+      do {
+        const params = new URLSearchParams({ begin_time: beginTime, end_time: endTime, sort_order: 'ASC', limit: '100' });
+        if (cursor) params.set('cursor', cursor);
+        const res = await fetch('https://connect.squareup.com/v2/payments?' + params.toString(), {
+          headers: { 'Authorization': 'Bearer ' + token, 'Square-Version': '2024-01-18', 'Content-Type': 'application/json' }
+        });
+        if (!res.ok) throw new Error('Square payments API ' + res.status);
+        const data = await res.json();
+        count += (data.payments || []).filter(function(p) { return p.status === 'COMPLETED'; }).length;
+        cursor = data.cursor || null;
+      } while (cursor);
+      await h.noteSync();
+      return { count };
+    },
+
+    async fetchMonthly(env, h, q) {
+      const months = _monthRange(q.from, q.to);
+      const counts = [];
+      for (const m of months) {
+        const lastDay = new Date(+m.slice(0,4), +m.slice(5,7), 0).getDate();
+        try {
+          const r = await ADAPTERS.pos.fetchRange(env, h, { ...q, from: m + '-01', to: m + '-' + String(lastDay).padStart(2,'0') });
+          counts.push(r.count);
+        } catch (e) { counts.push(0); }
+      }
+      return { months, count: counts };
+    }
   },
 
   /* >>> ADAPTER 3: ROSTERING (optional - only if the owner has one)
@@ -261,8 +317,22 @@ const ADAPTERS = {
 
 
 /* ============================================================================
-   Xero adapter helpers
+   Shared adapter helpers
 ============================================================================ */
+
+/* Return the current UTC offset string for a timezone name, e.g. "+10:00".
+   Used to build RFC-3339 timestamps for Square and Shopify. */
+function _tzOffset(tz) {
+  try {
+    const now = new Date();
+    const local  = new Date(now.toLocaleString('en-US', { timeZone: tz }));
+    const utc    = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+    const diffMin = Math.round((local - utc) / 60000);
+    const sign = diffMin >= 0 ? '+' : '-';
+    const abs  = Math.abs(diffMin);
+    return sign + String(Math.floor(abs / 60)).padStart(2, '0') + ':' + String(abs % 60).padStart(2, '0');
+  } catch (e) { return '+10:00'; }
+}
 
 async function _xeroTenantIds(env, h) {
   const tokens = await h.getTokens();
