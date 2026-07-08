@@ -165,8 +165,11 @@ body {
 .metric-tab:hover { background: #fff; color: var(--black); }
 .metric-tab.active { background: #fff; color: var(--black); font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
 
-.loc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 1.5rem; }
-@media (max-width: 640px) { .loc-grid { grid-template-columns: 1fr; } }
+.loc-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 1.5rem; }
+@media (max-width: 900px) { .loc-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .loc-grid { grid-template-columns: 1fr; } }
+.source-col.combined { background: #f4f0ea; border-color: var(--sage); border-style: solid; }
+.loc-name.combined-name { color: var(--sage); border-bottom-color: var(--sage); }
 .loc-name { font-family: 'Bebas Neue', sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--black); margin-bottom: 0.9rem; padding-bottom: 0.6rem; border-bottom: 2px solid var(--accent); }
 .loc-row { padding: 0.6rem 0; border-top: 1px solid var(--border); }
 .loc-row:first-of-type { border-top: none; }
@@ -937,21 +940,40 @@ function periodLocationValues(slot, loc) {
   return out;
 }
 
+function periodCombinedValues(slot) {
+  var d = state.data;
+  if (!d || !d.periods || !d.periods[slot]) return {};
+  var p = d.periods[slot];
+  var acc = p.accounting || null;
+  var pos = p.pos || null;
+  var out = {};
+  if (acc) {
+    out.revenue    = num(acc.revenue);
+    out.cogs       = num(acc.cogs);
+    out.wagesSuper = num(acc.wagesSuper);
+    out.overheads  = num(acc.overheads);
+  }
+  if (pos) out.count = num(pos.count);
+  return out;
+}
+
 /* --- Albury | Wodonga side-by-side grid --- */
 function renderLocationGrid(root, r) {
   var accConf = isConfigured('accounting');
   var posConf = isConfigured('pos');
   var curA = periodLocationValues('cur', 'albury'),  prevA = periodLocationValues('prev', 'albury');
   var curW = periodLocationValues('cur', 'wodonga'), prevW = periodLocationValues('prev', 'wodonga');
+  var curC  = periodCombinedValues('cur'),  prevC  = periodCombinedValues('prev');
   var grid = el('div', 'loc-grid');
-  grid.appendChild(locationCol('Albury',  curA, prevA, r, accConf, posConf));
-  grid.appendChild(locationCol('Wodonga', curW, prevW, r, accConf, posConf));
+  grid.appendChild(locationCol('Albury',  curA, prevA, r, accConf, posConf, false));
+  grid.appendChild(locationCol('Wodonga', curW, prevW, r, accConf, posConf, false));
+  grid.appendChild(locationCol('Both stores', curC, prevC, r, accConf, posConf, true));
   root.appendChild(grid);
 }
 
-function locationCol(label, cur, prev, r, accConf, posConf) {
-  var col = el('div', 'source-col');
-  col.appendChild(el('div', 'loc-name', label));
+function locationCol(label, cur, prev, r, accConf, posConf, isCombined) {
+  var col = el('div', isCombined ? 'source-col combined' : 'source-col');
+  col.appendChild(el('div', isCombined ? 'loc-name combined-name' : 'loc-name', label));
 
   function row(rowLabel, valueHtml, subHtml, chgHtml) {
     var d = el('div', 'loc-row');
