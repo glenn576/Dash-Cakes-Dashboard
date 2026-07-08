@@ -201,7 +201,10 @@ const ADAPTERS = {
       const offset = _tzOffset(q.tz || 'Australia/Sydney');
       const beginTime = q.from + 'T00:00:00' + offset;
       const endTime   = q.to   + 'T23:59:59' + offset;
-      const LOCATIONS = { albury: 'L96MPP0J2PJN9', wodonga: 'LCSQR972MP157' };
+      const LOCATIONS = {
+        albury:  ['L96MPP0J2PJN9', 'VC0RZ0FY4NZH5'],  // Dash Albury + Albury
+        wodonga: ['LCSQR972MP157', 'LDWD004HPAQTS']    // Dash Wodonga + Wodonga
+      };
       async function countForLocation(locationId) {
         let count = 0, cursor = null;
         do {
@@ -217,9 +220,12 @@ const ADAPTERS = {
         } while (cursor);
         return count;
       }
-      const [alburyCount, wodongaCount] = await Promise.all([
-        countForLocation(LOCATIONS.albury), countForLocation(LOCATIONS.wodonga)
+      const [albCounts, wodCounts] = await Promise.all([
+        Promise.all(LOCATIONS.albury.map(id => countForLocation(id))),
+        Promise.all(LOCATIONS.wodonga.map(id => countForLocation(id)))
       ]);
+      const alburyCount = albCounts.reduce((a, b) => a + b, 0);
+      const wodongaCount = wodCounts.reduce((a, b) => a + b, 0);
       await h.noteSync();
       return { count: alburyCount + wodongaCount, locations: { albury: { count: alburyCount }, wodonga: { count: wodongaCount } } };
     },
