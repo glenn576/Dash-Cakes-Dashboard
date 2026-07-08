@@ -98,61 +98,59 @@ const ADAPTERS = {
     },
 
     async fetchRange(env, h, q) {
-      const tenantIds = await _xeroTenantIds(env, h);
-      const params = new URLSearchParams({
-        fromDate: q.from,
-        toDate: q.to,
-        periods: '1',
-        timeframe: 'MONTH',
-        standardLayout: 'true'
-      });
-      const results = await Promise.all(tenantIds.map(tenantId =>
-        h.fetchJson(
-          'https://api.xero.com/api.xro/2.0/Reports/ProfitAndLoss?' + params.toString(),
-          { headers: { 'Xero-Tenant-Id': tenantId, 'Accept': 'application/json' } }
-        ).then(data => _parseXeroPL(data, 1)[0])
+      const tenants = await _xeroTenantsWithNames(env, h);
+      const params = new URLSearchParams({ fromDate: q.from, toDate: q.to, periods: '1', timeframe: 'MONTH', standardLayout: 'true' });
+      const results = await Promise.all(tenants.map(t =>
+        h.fetchJson('https://api.xero.com/api.xro/2.0/Reports/ProfitAndLoss?' + params.toString(),
+          { headers: { 'Xero-Tenant-Id': t.id, 'Accept': 'application/json' } }
+        ).then(data => ({ ...(_parseXeroPL(data, 1)[0]), _name: t.name }))
       ));
       await h.noteSync();
-      return results.reduce((acc, r) => ({
-        revenue: (acc.revenue||0) + (r.revenue||0),
-        cogs: (acc.cogs||0) + (r.cogs||0),
-        wagesSuper: (acc.wagesSuper||0) + (r.wagesSuper||0),
-        overheads: (acc.overheads||0) + (r.overheads||0)
-      }), { revenue: 0, cogs: 0, wagesSuper: 0, overheads: 0 });
+      const locs = { albury: { revenue:0,cogs:0,wagesSuper:0,overheads:0 }, wodonga: { revenue:0,cogs:0,wagesSuper:0,overheads:0 } };
+      const combined = { revenue:0, cogs:0, wagesSuper:0, overheads:0 };
+      for (const r of results) {
+        const loc = r._name && r._name.toLowerCase().includes('wodonga') ? 'wodonga' : 'albury';
+        for (const k of ['revenue','cogs','wagesSuper','overheads']) {
+          locs[loc][k] += r[k] || 0;
+          combined[k] += r[k] || 0;
+        }
+      }
+      return { ...combined, locations: locs };
     },
 
     async fetchMonthly(env, h, q) {
-      const tenantIds = await _xeroTenantIds(env, h);
+      const tenants = await _xeroTenantsWithNames(env, h);
       const months = _monthRange(q.from, q.to);
-      const combined = { months, revenue: Array(months.length).fill(0), cogs: Array(months.length).fill(0), wagesSuper: Array(months.length).fill(0), overheads: Array(months.length).fill(0) };
-      for (const tenantId of tenantIds) {
+      const zero = () => Array(months.length).fill(0);
+      const combined = { months, revenue: zero(), cogs: zero(), wagesSuper: zero(), overheads: zero() };
+      const locs = {
+        albury:  { revenue: zero(), cogs: zero(), wagesSuper: zero(), overheads: zero() },
+        wodonga: { revenue: zero(), cogs: zero(), wagesSuper: zero(), overheads: zero() }
+      };
+      for (const t of tenants) {
+        const loc = t.name && t.name.toLowerCase().includes('wodonga') ? 'wodonga' : 'albury';
         for (let i = 0; i < months.length; i += 12) {
           const batch = months.slice(i, i + 12);
           const fromDate = batch[0] + '-01';
           const lastMonth = batch[batch.length - 1];
           const toDate = lastMonth + '-' + new Date(+lastMonth.slice(0,4), +lastMonth.slice(5,7), 0).getDate();
-          const params = new URLSearchParams({
-            fromDate,
-            toDate,
-            periods: String(batch.length),
-            timeframe: 'MONTH',
-            standardLayout: 'true'
-          });
+          const params = new URLSearchParams({ fromDate, toDate, periods: String(batch.length), timeframe: 'MONTH', standardLayout: 'true' });
           const data = await h.fetchJson(
             'https://api.xero.com/api.xro/2.0/Reports/ProfitAndLoss?' + params.toString(),
-            { headers: { 'Xero-Tenant-Id': tenantId, 'Accept': 'application/json' } }
+            { headers: { 'Xero-Tenant-Id': t.id, 'Accept': 'application/json' } }
           );
           const parsed = _parseXeroPL(data, batch.length);
           for (let j = 0; j < batch.length; j++) {
-            combined.revenue[i+j] += parsed[j] ? (parsed[j].revenue||0) : 0;
-            combined.cogs[i+j] += parsed[j] ? (parsed[j].cogs||0) : 0;
-            combined.wagesSuper[i+j] += parsed[j] ? (parsed[j].wagesSuper||0) : 0;
-            combined.overheads[i+j] += parsed[j] ? (parsed[j].overheads||0) : 0;
+            for (const k of ['revenue','cogs','wagesSuper','overheads']) {
+              const v = parsed[j] ? (parsed[j][k]||0) : 0;
+              combined[k][i+j] += v;
+              locs[loc][k][i+j] += v;
+            }
           }
         }
       }
       await h.noteSync();
-      return combined;
+      return { ...combined, locations: locs };
     }
   },
 
@@ -200,37 +198,45 @@ const ADAPTERS = {
     async fetchRange(env, h, q) {
       const token = env.POS_API_TOKEN;
       if (!token) throw new NotConfigured('pos');
-      /* Build timezone-aware timestamps (venue local midnight → midnight) */
       const offset = _tzOffset(q.tz || 'Australia/Sydney');
       const beginTime = q.from + 'T00:00:00' + offset;
       const endTime   = q.to   + 'T23:59:59' + offset;
-      let count = 0, cursor = null;
-      do {
-        const params = new URLSearchParams({ begin_time: beginTime, end_time: endTime, sort_order: 'ASC', limit: '100' });
-        if (cursor) params.set('cursor', cursor);
-        const res = await fetch('https://connect.squareup.com/v2/payments?' + params.toString(), {
-          headers: { 'Authorization': 'Bearer ' + token, 'Square-Version': '2024-01-18', 'Content-Type': 'application/json' }
-        });
-        if (!res.ok) throw new Error('Square payments API ' + res.status);
-        const data = await res.json();
-        count += (data.payments || []).filter(function(p) { return p.status === 'COMPLETED'; }).length;
-        cursor = data.cursor || null;
-      } while (cursor);
+      const LOCATIONS = { albury: 'L96MPP0J2PJN9', wodonga: 'LCSQR972MP157' };
+      async function countForLocation(locationId) {
+        let count = 0, cursor = null;
+        do {
+          const params = new URLSearchParams({ begin_time: beginTime, end_time: endTime, sort_order: 'ASC', limit: '100', location_id: locationId });
+          if (cursor) params.set('cursor', cursor);
+          const res = await fetch('https://connect.squareup.com/v2/payments?' + params.toString(), {
+            headers: { 'Authorization': 'Bearer ' + token, 'Square-Version': '2024-01-18', 'Content-Type': 'application/json' }
+          });
+          if (!res.ok) throw new Error('Square payments API ' + res.status);
+          const data = await res.json();
+          count += (data.payments || []).filter(p => p.status === 'COMPLETED').length;
+          cursor = data.cursor || null;
+        } while (cursor);
+        return count;
+      }
+      const [alburyCount, wodongaCount] = await Promise.all([
+        countForLocation(LOCATIONS.albury), countForLocation(LOCATIONS.wodonga)
+      ]);
       await h.noteSync();
-      return { count };
+      return { count: alburyCount + wodongaCount, locations: { albury: { count: alburyCount }, wodonga: { count: wodongaCount } } };
     },
 
     async fetchMonthly(env, h, q) {
       const months = _monthRange(q.from, q.to);
-      const counts = [];
+      const counts = [], albCounts = [], wodCounts = [];
       for (const m of months) {
         const lastDay = new Date(+m.slice(0,4), +m.slice(5,7), 0).getDate();
         try {
           const r = await ADAPTERS.pos.fetchRange(env, h, { ...q, from: m + '-01', to: m + '-' + String(lastDay).padStart(2,'0') });
           counts.push(r.count);
-        } catch (e) { counts.push(0); }
+          albCounts.push(r.locations ? r.locations.albury.count : 0);
+          wodCounts.push(r.locations ? r.locations.wodonga.count : 0);
+        } catch (e) { counts.push(0); albCounts.push(0); wodCounts.push(0); }
       }
-      return { months, count: counts };
+      return { months, count: counts, locations: { albury: { count: albCounts }, wodonga: { count: wodCounts } } };
     }
   },
 
@@ -352,6 +358,18 @@ async function _xeroTenantId(env, h) {
   const ids = await _xeroTenantIds(env, h);
   return ids[0];
 }
+async function _xeroTenantsWithNames(env, h) {
+  const tokens = await h.getTokens();
+  if (tokens && tokens.tenantMeta && tokens.tenantMeta.length) return tokens.tenantMeta;
+  const data = await h.fetchJson('https://api.xero.com/connections', { headers: { 'Accept': 'application/json' } });
+  if (!Array.isArray(data) || !data.length) throw new Error('No Xero organisation found');
+  const tenantMeta = data.map(c => ({ id: c.tenantId, name: c.tenantName || '' }));
+  const ids = tenantMeta.map(t => t.id);
+  const names = tenantMeta.map(t => t.name).join(' + ');
+  await h.saveTokens({ ...tokens, tenantIds: ids, tenantId: ids[0], tenantName: names, tenantMeta });
+  return tenantMeta;
+}
+
 
 const WAGE_KEYWORDS = /wages|salaries|superannuation|super|payroll|annual leave|long service|workcover/i;
 

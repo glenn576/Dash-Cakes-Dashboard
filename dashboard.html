@@ -160,6 +160,19 @@ body {
 .metric-tab:hover { background: #fff; color: var(--black); }
 .metric-tab.active { background: #fff; color: var(--black); font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
 
+.loc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 1.5rem; }
+@media (max-width: 640px) { .loc-grid { grid-template-columns: 1fr; } }
+.loc-name { font-family: 'Khand', sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--black); margin-bottom: 0.9rem; padding-bottom: 0.6rem; border-bottom: 2px solid var(--accent); }
+.loc-row { padding: 0.6rem 0; border-top: 1px solid var(--border); }
+.loc-row:first-of-type { border-top: none; }
+.loc-row-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.13em; color: var(--muted); margin-bottom: 0.15rem; }
+.loc-row-val { font-family: 'Khand', sans-serif; font-size: 34px; font-weight: 700; color: var(--black); line-height: 1.05; }
+.loc-row-val.dim { color: var(--muted); font-size: 22px; }
+.loc-row-sub { font-size: 12px; color: var(--muted); margin-top: 0.05rem; }
+.loc-row-chg { font-size: 11px; margin-top: 0.25rem; }
+.loc-row-chg .good { color: var(--green); }
+.loc-row-chg .bad  { color: var(--coral); }
+
 /* Multi-source grid: side-by-side source columns */
 .source-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 1.5rem; }
 .source-col { background: #fffdf9; border: 1px solid var(--border); border-radius: 16px; padding: 1.3rem 1.4rem; }
@@ -892,31 +905,132 @@ function renderDashboard(root) {
 
   root.appendChild(el('div', 'period-heading', periodLabel() + ' <span>· ' + fmtRange(r) + '</span>'));
 
-  /* Metric tab sub-navigation */
-  var METRIC_TABS = [
-    { key: 'sales',        label: 'Sales' },
-    { key: 'cogs',         label: 'Cost of goods' },
-    { key: 'profit',       label: 'Profit' },
-    { key: 'wages',        label: 'Wages' },
-    { key: 'acs',          label: 'Avg customer spend' },
-    { key: 'transactions', label: 'Transactions' }
-  ];
-  var mtNav = el('div', 'metric-tabs');
-  METRIC_TABS.forEach(function (mt) {
-    var btn = el('button', 'metric-tab' + (state.metricTab === mt.key ? ' active' : ''), mt.label);
-    btn.onclick = function () { state.metricTab = mt.key; render(); };
-    mtNav.appendChild(btn);
-  });
-  root.appendChild(mtNav);
+  renderLocationGrid(root, r);
+}
 
-  var cur = periodValues('cur'), prev = periodValues('prev'), yoy = periodValues('yoy');
+/* --- Per-location data helper --- */
+function periodLocationValues(slot, loc) {
+  var d = state.data;
+  if (!d || !d.periods || !d.periods[slot]) return {};
+  var p = d.periods[slot];
+  var acc = (p.accounting && p.accounting.locations && p.accounting.locations[loc]) || null;
+  var pos = (p.pos && p.pos.locations && p.pos.locations[loc]) || null;
+  var out = {};
+  if (acc) {
+    out.revenue = num(acc.revenue);
+    out.cogs = num(acc.cogs);
+    out.wagesSuper = num(acc.wagesSuper);
+    out.overheads = num(acc.overheads);
+  }
+  if (pos) out.count = num(pos.count);
+  return out;
+}
 
-  if (state.metricTab === 'sales')        renderSalesTab(root, cur, prev, yoy, r);
-  else if (state.metricTab === 'cogs')    renderSingleMetricTab(root, 'cogs', cur, prev, yoy, r);
-  else if (state.metricTab === 'profit')  renderSingleMetricTab(root, 'profit', cur, prev, yoy, r);
-  else if (state.metricTab === 'wages')   renderWagesTab(root, cur, prev, yoy, r);
-  else if (state.metricTab === 'acs')     renderSingleMetricTab(root, 'acs', cur, prev, yoy, r);
-  else if (state.metricTab === 'transactions') renderSingleMetricTab(root, 'transactions', cur, prev, yoy, r);
+/* --- Albury | Wodonga side-by-side grid --- */
+function renderLocationGrid(root, r) {
+  var accConf = isConfigured('accounting');
+  var posConf = isConfigured('pos');
+  var curA = periodLocationValues('cur', 'albury'),  prevA = periodLocationValues('prev', 'albury');
+  var curW = periodLocationValues('cur', 'wodonga'), prevW = periodLocationValues('prev', 'wodonga');
+  var grid = el('div', 'loc-grid');
+  grid.appendChild(locationCol('Albury',  curA, prevA, r, accConf, posConf));
+  grid.appendChild(locationCol('Wodonga', curW, prevW, r, accConf, posConf));
+  root.appendChild(grid);
+}
+
+function locationCol(label, cur, prev, r, accConf, posConf) {
+  var col = el('div', 'source-col');
+  col.appendChild(el('div', 'loc-name', label));
+
+  function row(rowLabel, valueHtml, subHtml, chgHtml) {
+    var d = el('div', 'loc-row');
+    d.appendChild(el('div', 'loc-row-label', rowLabel));
+    var vd = el('div', 'loc-row-val'); vd.innerHTML = valueHtml; d.appendChild(vd);
+    if (subHtml) { var sd = el('div', 'loc-row-sub'); sd.innerHTML = subHtml; d.appendChild(sd); }
+    if (chgHtml) { var cd = el('div', 'loc-row-chg'); cd.innerHTML = chgHtml; d.appendChild(cd); }
+    return d;
+  }
+  function notConf(rowLabel, note) {
+    var d = el('div', 'loc-row');
+    d.appendChild(el('div', 'loc-row-label', rowLabel));
+    var vd = el('div', 'loc-row-val dim'); vd.textContent = 'Not configured'; d.appendChild(vd);
+    if (note) d.appendChild(el('div', 'loc-row-sub', note));
+    return d;
+  }
+  function pct(v) { return v != null ? v.toFixed(1) + '%' : '\u2014'; }
+  function chgGoodDown(curV, prevV) { /* lower is better (cost ratios) */
+    if (curV == null || prevV == null) return null;
+    var diff = curV - prevV;
+    var cls = diff < 0 ? 'good' : (diff > 0 ? 'bad' : '');
+    var arrow = diff > 0 ? '\u25b2 ' : '\u25bc ';
+    return 'vs ' + esc(r.prevLabel) + ': <span class="' + cls + '">' + arrow + Math.abs(diff).toFixed(1) + ' pp</span>';
+  }
+  function chgGoodUp(curV, prevV) { /* higher is better (revenue, count) */
+    if (curV == null || prevV == null || prevV === 0) return null;
+    var diff = ((curV - prevV) / Math.abs(prevV)) * 100;
+    var cls = diff > 0 ? 'good' : (diff < 0 ? 'bad' : '');
+    var arrow = diff > 0 ? '\u25b2 ' : '\u25bc ';
+    return 'vs ' + esc(r.prevLabel) + ': <span class="' + cls + '">' + arrow + Math.abs(diff).toFixed(1) + '%</span>';
+  }
+
+  if (!accConf) {
+    col.appendChild(notConf('Revenue', 'Connect Xero'));
+    col.appendChild(notConf('Cost of goods', 'Connect Xero'));
+    col.appendChild(notConf('Wages', 'Connect Xero'));
+    col.appendChild(notConf('Overheads', 'Connect Xero'));
+  } else {
+    var rev = cur.revenue != null ? cur.revenue : null;
+    var prevRev = prev.revenue != null ? prev.revenue : null;
+    col.appendChild(row('Revenue',
+      rev != null ? fmtMoney(rev, true) : '\u2014',
+      'Xero · ex-GST',
+      chgGoodUp(rev, prevRev)));
+
+    var cogsAmt = cur.cogs;
+    var cogsPct = (rev && cogsAmt != null) ? (cogsAmt / rev * 100) : null;
+    var prevCogsPct = (prevRev && prev.cogs != null) ? (prev.cogs / prevRev * 100) : null;
+    col.appendChild(row('Cost of goods',
+      (cogsPct != null ? pct(cogsPct) + ' ' : '') + (cogsAmt != null ? '<span style="font-size:20px">' + fmtMoney(cogsAmt, false) + '</span>' : '\u2014'),
+      'Target 30%',
+      chgGoodDown(cogsPct, prevCogsPct)));
+
+    var wageAmt = cur.wagesSuper;
+    var wagePct = (rev && wageAmt != null) ? (wageAmt / rev * 100) : null;
+    var prevWagePct = (prevRev && prev.wagesSuper != null) ? (prev.wagesSuper / prevRev * 100) : null;
+    col.appendChild(row('Wages & super',
+      (wagePct != null ? pct(wagePct) + ' ' : '') + (wageAmt != null ? '<span style="font-size:20px">' + fmtMoney(wageAmt, false) + '</span>' : '\u2014'),
+      'Target 30%',
+      chgGoodDown(wagePct, prevWagePct)));
+
+    var ohAmt = cur.overheads;
+    var ohPct = (rev && ohAmt != null) ? (ohAmt / rev * 100) : null;
+    var prevOhPct = (prevRev && prev.overheads != null) ? (prev.overheads / prevRev * 100) : null;
+    col.appendChild(row('Overheads',
+      (ohPct != null ? pct(ohPct) + ' ' : '') + (ohAmt != null ? '<span style="font-size:20px">' + fmtMoney(ohAmt, false) + '</span>' : '\u2014'),
+      'Operating expenses',
+      chgGoodDown(ohPct, prevOhPct)));
+  }
+
+  if (!posConf) {
+    col.appendChild(notConf('Transactions', 'Connect Square'));
+    col.appendChild(notConf('Avg spend', 'Connect Square'));
+  } else {
+    var cnt = cur.count != null ? cur.count : null;
+    var prevCnt = prev.count != null ? prev.count : null;
+    col.appendChild(row('Transactions',
+      cnt != null ? String(cnt) : '\u2014',
+      'Completed · Square',
+      chgGoodUp(cnt, prevCnt)));
+
+    var acs = (rev != null && cnt != null && cnt > 0) ? rev / cnt : null;
+    var prevAcs = (prevRev != null && prevCnt != null && prevCnt > 0) ? prevRev / prevCnt : null;
+    col.appendChild(row('Avg spend',
+      acs != null ? fmtMoney(acs, true) : '\u2014',
+      'Revenue \xf7 transactions',
+      chgGoodUp(acs, prevAcs)));
+  }
+
+  return col;
 }
 
 /* --- Sales tab: Xero / Square / Shopify side by side --- */
