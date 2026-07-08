@@ -207,17 +207,19 @@ const ADAPTERS = {
       };
       async function countForLocation(locationId) {
         let count = 0, cursor = null;
-        do {
-          const params = new URLSearchParams({ begin_time: beginTime, end_time: endTime, sort_order: 'ASC', limit: '100', location_id: locationId });
-          if (cursor) params.set('cursor', cursor);
-          const res = await fetch('https://connect.squareup.com/v2/payments?' + params.toString(), {
-            headers: { 'Authorization': 'Bearer ' + token, 'Square-Version': '2024-01-18', 'Content-Type': 'application/json' }
-          });
-          if (!res.ok) throw new Error('Square payments API ' + res.status);
-          const data = await res.json();
-          count += (data.payments || []).filter(p => p.status === 'COMPLETED').length;
-          cursor = data.cursor || null;
-        } while (cursor);
+        try {
+          do {
+            const params = new URLSearchParams({ begin_time: beginTime, end_time: endTime, sort_order: 'ASC', limit: '100', location_id: locationId });
+            if (cursor) params.set('cursor', cursor);
+            const res = await fetch('https://connect.squareup.com/v2/payments?' + params.toString(), {
+              headers: { 'Authorization': 'Bearer ' + token, 'Square-Version': '2024-01-18', 'Content-Type': 'application/json' }
+            });
+            if (!res.ok) { console.error('Square ' + locationId + ' returned ' + res.status); break; }
+            const data = await res.json();
+            count += (data.payments || []).filter(p => p.status === 'COMPLETED').length;
+            cursor = data.cursor || null;
+          } while (cursor);
+        } catch (e) { console.error('Square location ' + locationId + ' error: ' + e.message); }
         return count;
       }
       const [albCounts, wodCounts] = await Promise.all([
