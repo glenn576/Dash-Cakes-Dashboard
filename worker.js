@@ -762,7 +762,14 @@ async function authCallback(env, source, url) {
   }
   await env.TOKENS.delete('oauthstate:' + source);
   const redirectUri = url.origin + '/auth/' + source + '/callback';
-  const res = await fetch(cfg.tokenUrl, tokenRequestInit(cfg, {
+  /* Shopify: dynamic token URL, no refresh token, no expiry */
+  let tokenUrl = cfg.tokenUrl;
+  if (source === 'shopify') {
+    const shop = await env.TOKENS.get('shopify_shop') || env.SHOPIFY_SHOP;
+    if (!shop) return new Response('SHOPIFY_SHOP missing during callback.', { status: 500 });
+    tokenUrl = `https://${shop}/admin/oauth/access_token`;
+  }
+  const res = await fetch(tokenUrl, tokenRequestInit(cfg, {
     grant_type: 'authorization_code',
     code,
     redirect_uri: redirectUri
@@ -771,11 +778,12 @@ async function authCallback(env, source, url) {
     return new Response('The connection couldn’t be finished (the tool said no: ' + res.status + '). Your AI will check the app settings - the usual cause is a redirect address that doesn’t match exactly.', { status: 502 });
   }
   const t = await res.json();
+  const expiresAt = source === 'shopify' ? null : Date.now() + ((t.expires_in || 1800) * 1000);
   await saveTokens(env, source, {
     access_token: t.access_token,
     refresh_token: t.refresh_token || null,
     token_type: t.token_type || 'Bearer',
-    expires_at: Date.now() + ((t.expires_in || 1800) * 1000),
+    expires_at: expiresAt,
     obtained_at: new Date().toISOString()
   });
   /* After token storage, adapters' status() should resolve org name etc. */
