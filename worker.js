@@ -1095,6 +1095,19 @@ export default {
       }
       return json({ error: 'unknown source' }, 400);
     }
+    if (path === '/api/shopify-debug' && request.method === 'GET') {
+      if (!loggedIn) return json({ error: 'auth' }, 401);
+      const h = makeHelpers(env, 'shopify');
+      const tokens = await h.getTokens();
+      const token = (tokens && tokens.access_token) || env.SHOPIFY_ACCESS_TOKEN;
+      const shop = await env.TOKENS.get('shopify_shop') || env.SHOPIFY_SHOP;
+      const from = url.searchParams.get('from') || '2026-06-01';
+      const to = url.searchParams.get('to') || '2026-06-30';
+      const testUrl = 'https://' + shop + '/admin/api/2024-01/orders.json?status=any&financial_status=paid&created_at_min=' + from + 'T00:00:00%2B10:00&created_at_max=' + to + 'T23:59:59%2B10:00&limit=5&fields=subtotal_price,id,financial_status,status';
+      const res = await fetch(testUrl, { headers: { 'X-Shopify-Access-Token': token } });
+      const body = await res.text();
+      return json({ shop, hasToken: !!token, status: res.status, ok: res.ok, url: testUrl, body: body.slice(0, 2000) });
+    }
     return new Response('Not found', { status: 404 });
   },
 
