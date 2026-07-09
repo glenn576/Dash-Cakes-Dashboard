@@ -734,13 +734,24 @@ function setupPage() {
 
 async function authStart(env, source, url) {
   const adapter = ADAPTERS[source];
-  if (!adapter || adapter.auth !== 'oauth' || !adapter.oauth.authorizeUrl) {
+  if (!adapter || adapter.auth !== 'oauth') {
     return new Response('This connection is not set up for browser authorisation yet.', { status: 404 });
   }
   const cfg = adapter.oauth;
   const state = randomState();
   await env.TOKENS.put('oauthstate:' + source, state, { expirationTtl: 600 });
   const redirectUri = url.origin + '/auth/' + source + '/callback';
+  /* Shopify: dynamic authorize URL built from SHOPIFY_SHOP env var */
+  if (source === 'shopify') {
+    const shop = env.SHOPIFY_SHOP;
+    if (!shop) return new Response('SHOPIFY_SHOP is not configured.', { status: 500 });
+    await env.TOKENS.put('shopify_shop', shop, { expirationTtl: 86400 * 365 });
+    const p = new URLSearchParams({ client_id: env[cfg.clientIdSecret] || '', scope: cfg.scopes || '', redirect_uri: redirectUri, state });
+    return Response.redirect('https://' + shop + '/admin/oauth/authorize?' + p.toString(), 302);
+  }
+  if (!cfg.authorizeUrl) {
+    return new Response('This connection is not set up for browser authorisation yet.', { status: 404 });
+  }
   const p = new URLSearchParams({
     response_type: 'code',
     client_id: env[cfg.clientIdSecret] || '',
