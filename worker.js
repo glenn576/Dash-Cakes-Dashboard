@@ -296,6 +296,7 @@ const ADAPTERS = {
       const token = env.SHOPIFY_ACCESS_TOKEN;
       if (!shop || !token) throw new NotConfigured('shopify');
       let revenue = 0;
+      let count = 0;
       let pageInfo = null;
       let url = `https://${shop}/admin/api/2024-01/orders.json?status=closed&financial_status=paid&created_at_min=${q.from}T00:00:00%2B10:00&created_at_max=${q.to}T23:59:59%2B10:00&limit=250&fields=subtotal_price`;
       while (true) {
@@ -305,26 +306,27 @@ const ADAPTERS = {
         if (!res.ok) throw new Error('Shopify orders API error ' + res.status);
         const data = await res.json();
         const orders = data.orders || [];
-        for (const o of orders) revenue += parseFloat(o.subtotal_price || '0');
+        for (const o of orders) { revenue += parseFloat(o.subtotal_price || '0'); count++; }
         const link = res.headers.get('Link') || '';
         const next = link.match(/<([^>]+)>;\s*rel="next"/);
         if (!next) break;
         pageInfo = next[1];
       }
-      return { revenue };
+      return { revenue, count };
     },
     async fetchMonthly(env, h, q) {
       const months = [];
       const revenue = [];
+      const count = [];
       const ms = _monthRange(q.from, q.to);
       for (const m of ms) {
         const lastDay = new Date(+m.slice(0,4), +m.slice(5,7), 0).getDate();
         try {
           const r = await ADAPTERS.shopify.fetchRange(env, h, { from: m + '-01', to: m + '-' + lastDay });
-          months.push(m); revenue.push(r.revenue || 0);
-        } catch (e) { months.push(m); revenue.push(0); }
+          months.push(m); revenue.push(r.revenue || 0); count.push(r.count || 0);
+        } catch (e) { months.push(m); revenue.push(0); count.push(0); }
       }
-      return { months, revenue };
+      return { months, revenue, count };
     }
   }
 };

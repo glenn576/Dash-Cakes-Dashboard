@@ -165,8 +165,8 @@ body {
 .metric-tab:hover { background: #fff; color: var(--black); }
 .metric-tab.active { background: #fff; color: var(--black); font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
 
-.loc-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-bottom: 1.5rem; }
-@media (max-width: 900px) { .loc-grid { grid-template-columns: 1fr 1fr; } }
+.loc-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 14px; margin-bottom: 1.5rem; }
+@media (max-width: 1100px) { .loc-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 560px) { .loc-grid { grid-template-columns: 1fr; } }
 .source-col.combined { background: #f4f0ea; border-color: var(--sage); border-style: solid; }
 .loc-name.combined-name { color: var(--sage); border-bottom-color: var(--sage); }
@@ -957,16 +957,27 @@ function periodCombinedValues(slot) {
   return out;
 }
 
+function periodShopifyValues(slot) {
+  var d = state.data;
+  if (!d || !d.periods || !d.periods[slot]) return {};
+  var p = d.periods[slot];
+  var sh = p.shopify || null;
+  if (!sh) return {};
+  return { revenue: num(sh.revenue), count: sh.count != null ? num(sh.count) : null };
+}
+
 /* --- Albury | Wodonga side-by-side grid --- */
 function renderLocationGrid(root, r) {
   var accConf = isConfigured('accounting');
   var posConf = isConfigured('pos');
   var curA = periodLocationValues('cur', 'albury'),  prevA = periodLocationValues('prev', 'albury');
   var curW = periodLocationValues('cur', 'wodonga'), prevW = periodLocationValues('prev', 'wodonga');
+  var curS = periodShopifyValues('cur'),  prevS = periodShopifyValues('prev');
   var curC  = periodCombinedValues('cur'),  prevC  = periodCombinedValues('prev');
   var grid = el('div', 'loc-grid');
   grid.appendChild(locationCol('Albury',  curA, prevA, r, accConf, posConf, false));
   grid.appendChild(locationCol('Wodonga', curW, prevW, r, accConf, posConf, false));
+  grid.appendChild(shopifyCol('Online', curS, prevS, r));
   grid.appendChild(locationCol('Both stores', curC, prevC, r, accConf, posConf, true));
   root.appendChild(grid);
 }
@@ -1062,6 +1073,60 @@ function locationCol(label, cur, prev, r, accConf, posConf, isCombined) {
       'Revenue \xf7 transactions',
       chgGoodUp(acs, prevAcs)));
   }
+
+  return col;
+}
+
+function shopifyCol(label, cur, prev, r) {
+  var shopConf = isConfigured('shopify');
+  var col = el('div', 'source-col shopify-col');
+  col.appendChild(el('div', 'loc-name', label));
+
+  function row(rowLabel, valueHtml, subHtml, chgHtml) {
+    var d = el('div', 'loc-row');
+    d.appendChild(el('div', 'loc-row-label', rowLabel));
+    var vd = el('div', 'loc-row-val'); vd.innerHTML = valueHtml; d.appendChild(vd);
+    if (subHtml) { var sd = el('div', 'loc-row-sub'); sd.innerHTML = subHtml; d.appendChild(sd); }
+    if (chgHtml) { var cd = el('div', 'loc-row-chg'); cd.innerHTML = chgHtml; d.appendChild(cd); }
+    return d;
+  }
+  function chgGoodUp(curV, prevV) {
+    if (curV == null || prevV == null || prevV === 0) return null;
+    var diff = ((curV - prevV) / Math.abs(prevV)) * 100;
+    var cls = diff > 0 ? 'good' : (diff < 0 ? 'bad' : '');
+    var arrow = diff > 0 ? '▲ ' : '▼ ';
+    return 'vs ' + esc(r.prevLabel) + ': <span class="' + cls + '">' + arrow + Math.abs(diff).toFixed(1) + '%</span>';
+  }
+
+  if (!shopConf) {
+    var notConf = el('div', 'loc-row');
+    notConf.appendChild(el('div', 'loc-row-label', 'Revenue'));
+    var vd = el('div', 'loc-row-val dim'); vd.textContent = 'Not connected'; notConf.appendChild(vd);
+    notConf.appendChild(el('div', 'loc-row-sub', 'Connect Shopify'));
+    col.appendChild(notConf);
+    return col;
+  }
+
+  var rev = cur.revenue != null ? cur.revenue : null;
+  var prevRev = prev.revenue != null ? prev.revenue : null;
+  col.appendChild(row('Revenue',
+    rev != null ? fmtMoney(rev, true) : '—',
+    'Shopify · ex-GST',
+    chgGoodUp(rev, prevRev)));
+
+  var cnt = cur.count != null ? cur.count : null;
+  var prevCnt = prev.count != null ? prev.count : null;
+  col.appendChild(row('Orders',
+    cnt != null ? String(cnt) : '—',
+    'Completed · Shopify',
+    chgGoodUp(cnt, prevCnt)));
+
+  var aov = (rev != null && cnt != null && cnt > 0) ? rev / cnt : null;
+  var prevAov = (prevRev != null && prevCnt != null && prevCnt > 0) ? prevRev / prevCnt : null;
+  col.appendChild(row('Avg order',
+    aov != null ? fmtMoney(aov, true) : '—',
+    'Revenue ÷ orders',
+    chgGoodUp(aov, prevAov)));
 
   return col;
 }
