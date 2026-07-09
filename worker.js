@@ -1095,6 +1095,40 @@ export default {
       }
       return json({ error: 'unknown source' }, 400);
     }
+    if (path === '/api/trend' && request.method === 'GET') {
+      if (!loggedIn) return json({ error: 'auth' }, 401);
+      const trendParam = parseMonthRange(url.searchParams.get('trend'));
+      if (!trendParam) return json({ error: 'bad trend range' }, 400);
+      const tz = url.searchParams.get('tz') || 'Australia/Sydney';
+      const rollover = Math.max(0, Math.min(6, parseInt(url.searchParams.get('rollover') || '0', 10) || 0));
+      const base = { tz, rollover };
+      const cacheKey = 'trendcache:' + [url.searchParams.get('trend') || '', tz, rollover].join('|');
+      const force = url.searchParams.get('refresh') === '1';
+      let trendData = null;
+      if (!force && env.TOKENS) {
+        const cached = await env.TOKENS.get(cacheKey);
+        if (cached) { try { trendData = JSON.parse(cached); } catch (e) {} }
+      }
+      if (!trendData) {
+        const trendOut = { months: monthList(trendParam.fromMonth, trendParam.toMonth) };
+        /* Only accounting + shopify — pos (Square) is 4 calls/month and would exceed subrequest limit */
+        for (const source of ['accounting', 'shopify']) {
+          const adapter = ADAPTERS[source];
+          if (!adapter || !adapter.configured) { trendOut[source] = null; continue; }
+          try {
+            const h = makeHelpers(env, source);
+            const series = await adapter.fetchMonthly(env, h, { ...base, ...trendParam });
+            trendOut[source] = alignSeries(trendOut.months, series);
+          } catch (err) { trendOut[source] = null; }
+        }
+        trendOut.pos = null; /* pos excluded: too many subrequests for monthly Square data */
+        trendData = { generatedAt: new Date().toISOString(), trend: trendOut };
+        if (env.TOKENS) {
+          try { await env.TOKENS.put(cacheKey, JSON.stringify(trendData), { expirationTtl: 300 }); } catch (e) {}
+        }
+      }
+      return json(trendData);
+    }
     if (path === '/api/shopify-debug' && request.method === 'GET') {
       if (!loggedIn) return json({ error: 'auth' }, 401);
       const h = makeHelpers(env, 'shopify');

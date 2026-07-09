@@ -538,10 +538,18 @@ function apiUrl(force) {
   var q = 'cur=' + iso(r.from) + ':' + iso(r.to)
         + '&prev=' + iso(r.prev.from) + ':' + iso(r.prev.to)
         + (r.yoy ? '&yoy=' + iso(r.yoy.from) + ':' + iso(r.yoy.to) : '')
-        + '&trend=' + monthKey(trendStart) + ':' + monthKey(trendEnd)
         + '&tz=' + encodeURIComponent(SETTINGS.timezone)
         + '&rollover=' + (+SETTINGS.rolloverHour || 0);
   return '/api/metrics?' + q + (force ? '&refresh=1' : '');
+}
+
+function trendUrl(force) {
+  var trendEnd = tradingToday();
+  var trendStart = addMonths(stamp(trendEnd.getUTCFullYear(), trendEnd.getUTCMonth() + 1, 1), -24);
+  var q = 'trend=' + monthKey(trendStart) + ':' + monthKey(trendEnd)
+        + '&tz=' + encodeURIComponent(SETTINGS.timezone)
+        + '&rollover=' + (+SETTINGS.rolloverHour || 0);
+  return '/api/trend?' + q + (force ? '&refresh=1' : '');
 }
 
 /* ---------- Manual mode: build state.data from typed-in numbers ---------- */
@@ -598,10 +606,16 @@ function fetchData(force) {
   }
   state.loading = true; state.fetchError = null;
   render();
-  fetch(apiUrl(force)).then(function (res) {
+  var pMain = fetch(apiUrl(force)).then(function (res) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.json();
-  }).then(function (json) {
+  });
+  var pTrend = fetch(trendUrl(force)).then(function (res) {
+    return res.ok ? res.json() : null;
+  }).catch(function () { return null; });
+  Promise.all([pMain, pTrend]).then(function (results) {
+    var json = results[0]; var trendResult = results[1];
+    if (trendResult && trendResult.trend) json.trend = trendResult.trend;
     state.data = json; state.fetchedAt = json.generatedAt ? new Date(json.generatedAt) : new Date(); state.loading = false;
     render();
   }).catch(function (err) {
