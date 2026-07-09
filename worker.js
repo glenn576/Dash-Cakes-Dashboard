@@ -275,15 +275,22 @@ const ADAPTERS = {
      Scopes needed: read_orders
   */
   shopify: {
-    configured: false,
-    auth: null,
-    oauth: {},
+    configured: true,
+    auth: 'oauth',
+    oauth: {
+      clientIdSecret: 'SHOPIFY_CLIENT_ID',
+      clientSecretSecret: 'SHOPIFY_CLIENT_SECRET',
+      scopes: 'read_orders',
+      tokenAuth: 'post'
+      /* authorizeUrl + tokenUrl built dynamically in authStart/authCallback via SHOPIFY_SHOP */
+    },
     async status(env, h) {
       try {
-        const shop = env.SHOPIFY_SHOP;
-        const token = env.SHOPIFY_ACCESS_TOKEN;
+        const tokens = await h.getTokens();
+        const token = (tokens && tokens.access_token) || env.SHOPIFY_ACCESS_TOKEN;
+        const shop = await env.TOKENS.get('shopify_shop') || env.SHOPIFY_SHOP;
         if (!shop || !token) return { connected: false };
-        const res = await fetch(`https://${shop}/admin/api/2024-01/shop.json`, {
+        const res = await fetch('https://' + shop + '/admin/api/2024-01/shop.json', {
           headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }
         });
         if (!res.ok) return { connected: false };
@@ -292,8 +299,9 @@ const ADAPTERS = {
       } catch (e) { return { connected: false, error: e.message }; }
     },
     async fetchRange(env, h, q) {
-      const shop = env.SHOPIFY_SHOP;
-      const token = env.SHOPIFY_ACCESS_TOKEN;
+      const tokens = await h.getTokens();
+      const token = (tokens && tokens.access_token) || env.SHOPIFY_ACCESS_TOKEN;
+      const shop = await env.TOKENS.get('shopify_shop') || env.SHOPIFY_SHOP;
       if (!shop || !token) throw new NotConfigured('shopify');
       let revenue = 0;
       let count = 0;
