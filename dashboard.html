@@ -1914,6 +1914,17 @@ function renderSettings(root) {
     ms.appendChild(mb);
     root.appendChild(ms);
   }
+
+  /* Sign out */
+  var soSec = section('Account');
+  soSec.appendChild(el('p', 'set-note', 'Sign out of this dashboard on this device. You will need your password to sign back in.'));
+  var soBtn = el('button', 'btn-plain', 'Sign out');
+  soBtn.style.marginTop = '8px';
+  soBtn.onclick = function () {
+    fetch('/api/logout', { method: 'POST' }).then(function () { location.reload(); });
+  };
+  soSec.appendChild(soBtn);
+  root.appendChild(soSec);
 }
 
 /* ============================================================
