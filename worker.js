@@ -201,33 +201,40 @@ const ADAPTERS = {
       const offset = _tzOffset(q.tz || 'Australia/Sydney');
       const beginTime = q.from + 'T00:00:00' + offset;
       const endTime   = q.to   + 'T23:59:59' + offset;
-      const LOCATIONS = {
-        albury:  ['L96MPP0J2PJN9', 'VC0RZ0FY4NZH5'],  // Dash Albury + Albury
-        wodonga: ['LCSQR972MP157', 'LDWD004HPAQTS']    // Dash Wodonga + Wodonga
-      };
-      async function countForLocation(locationId) {
-        let count = 0, cursor = null;
-        try {
-          do {
-            const params = new URLSearchParams({ begin_time: beginTime, end_time: endTime, sort_order: 'ASC', limit: '100', location_id: locationId });
-            if (cursor) params.set('cursor', cursor);
-            const res = await fetch('https://connect.squareup.com/v2/payments?' + params.toString(), {
-              headers: { 'Authorization': 'Bearer ' + token, 'Square-Version': '2024-01-18', 'Content-Type': 'application/json' }
-            });
-            if (!res.ok) { console.error('Square ' + locationId + ' returned ' + res.status); break; }
-            const data = await res.json();
-            count += (data.payments || []).filter(p => p.status === 'COMPLETED').length;
-            cursor = data.cursor || null;
-          } while (cursor);
-        } catch (e) { console.error('Square location ' + locationId + ' error: ' + e.message); }
-        return count;
-      }
-      const [albCounts, wodCounts] = await Promise.all([
-        Promise.all(LOCATIONS.albury.map(id => countForLocation(id))),
-        Promise.all(LOCATIONS.wodonga.map(id => countForLocation(id)))
-      ]);
-      const alburyCount = albCounts.reduce((a, b) => a + b, 0);
-      const wodongaCount = wodCounts.reduce((a, b) => a + b, 0);
+      /* Use Orders Search API (POST /v2/orders/search) covering all 4 locations in
+         one paginated call at 500/page — replaces 4 separate Payments API calls at
+         100/page. For a busy month this cuts Square subrequests from 100+ to <10,
+         keeping the metrics invocation within Cloudflare's 50-subrequest free limit. */
+      const ALBURY_IDS  = new Set(['L96MPP0J2PJN9', 'VC0RZ0FY4NZH5']);
+      const WODONGA_IDS = new Set(['LCSQR972MP157', 'LDWD004HPAQTS']);
+      const ALL_LOCATION_IDS = ['L96MPP0J2PJN9', 'VC0RZ0FY4NZH5', 'LCSQR972MP157', 'LDWD004HPAQTS'];
+      let alburyCount = 0, wodongaCount = 0, cursor = null;
+      do {
+        const body = {
+          location_ids: ALL_LOCATION_IDS,
+          query: {
+            filter: {
+              date_time_filter: { closed_at: { start_at: beginTime, end_at: endTime } },
+              state_filter: { states: ['COMPLETED'] }
+            }
+          },
+          limit: 500,
+          return_entries: true,
+          ...(cursor ? { cursor } : {})
+        };
+        const res = await fetch('https://connect.squareup.com/v2/orders/search', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Square-Version': '2024-01-18', 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error('Square Orders API ' + res.status);
+        const data = await res.json();
+        for (const entry of (data.order_entries || [])) {
+          if (ALBURY_IDS.has(entry.location_id)) alburyCount++;
+          else if (WODONGA_IDS.has(entry.location_id)) wodongaCount++;
+        }
+        cursor = data.cursor || null;
+      } while (cursor);
       await h.noteSync();
       return { count: alburyCount + wodongaCount, locations: { albury: { count: alburyCount }, wodonga: { count: wodongaCount } } };
     },
