@@ -306,7 +306,7 @@ const ADAPTERS = {
       let revenue = 0;
       let count = 0;
       let pageInfo = null;
-      let url = `https://${shop}/admin/api/2024-01/orders.json?status=closed&financial_status=paid&created_at_min=${q.from}T00:00:00%2B10:00&created_at_max=${q.to}T23:59:59%2B10:00&limit=250&fields=subtotal_price`;
+      let url = `https://${shop}/admin/api/2024-01/orders.json?status=any&financial_status=paid&created_at_min=${q.from}T00:00:00%2B10:00&created_at_max=${q.to}T23:59:59%2B10:00&limit=250&fields=subtotal_price`;
       while (true) {
         const res = await fetch(pageInfo ? pageInfo : url, {
           headers: { 'X-Shopify-Access-Token': token, 'Content-Type': 'application/json' }
