@@ -208,6 +208,14 @@ const ADAPTERS = {
       const ALBURY_IDS  = new Set(['L96MPP0J2PJN9', 'VC0RZ0FY4NZH5']);
       const WODONGA_IDS = new Set(['LCSQR972MP157', 'LDWD004HPAQTS']);
       const ALL_LOCATION_IDS = ['L96MPP0J2PJN9', 'VC0RZ0FY4NZH5', 'LCSQR972MP157', 'LDWD004HPAQTS'];
+      /* For single-month ranges, check KV cache first (historical months never change) */
+      const posSpan = Math.round((new Date(q.to) - new Date(q.from)) / 86400000);
+      const posCacheKey = posSpan <= 31 ? 'poscache:' + q.from.slice(0, 7) : null;
+      if (posCacheKey && env.TOKENS) {
+        const cached = await env.TOKENS.get(posCacheKey);
+        if (cached) { try { return JSON.parse(cached); } catch (e) {} }
+      }
+
       let alburyCount = 0, wodongaCount = 0, cursor = null;
       do {
         const body = {
@@ -235,8 +243,13 @@ const ADAPTERS = {
         }
         cursor = data.cursor || null;
       } while (cursor);
+      const posResult = { count: alburyCount + wodongaCount, locations: { albury: { count: alburyCount }, wodonga: { count: wodongaCount } } };
+      /* Cache single-month results for 48h — historical months don't change */
+      if (posCacheKey && env.TOKENS) {
+        try { await env.TOKENS.put(posCacheKey, JSON.stringify(posResult), { expirationTtl: 48 * 3600 }); } catch (e) {}
+      }
       await h.noteSync();
-      return { count: alburyCount + wodongaCount, locations: { albury: { count: alburyCount }, wodonga: { count: wodongaCount } } };
+      return posResult;
     },
 
     async fetchMonthly(env, h, q) {
@@ -951,17 +964,34 @@ async function sourceStatus(env, source) {
 async function fetchSlot(env, q) {
   /* One period slot: pull each configured source; null where unavailable. */
   /* POS (Square) paginates at 500/call and can exhaust the 50-subrequest free-plan
-     limit for date ranges spanning many months. Skip it for ranges > 60 days — the
-     revenue figures all come from accounting (Xero) and the transaction count over
-     a long period is a minor display metric, not load-bearing. */
+     limit for date ranges spanning many months. For ranges > 60 days, build the
+     count from per-month KV cache entries (populated when monthly views are loaded). */
   const daySpan = Math.round((new Date(q.to) - new Date(q.from)) / 86400000);
-  const skipPos = daySpan > 60;
+  const longRange = daySpan > 60;
 
   const out = {};
   for (const source of ['accounting', 'pos', 'rostering', 'shopify']) {
     const adapter = ADAPTERS[source];
     if (!adapter || !adapter.configured) { out[source] = null; continue; }
-    if (source === 'pos' && skipPos) { out[source] = null; continue; }
+    if (source === 'pos' && longRange) {
+      /* Attempt to build annual POS count from cached monthly slices */
+      try {
+        const months = _monthRange(q.from, q.to);
+        let total = 0, albTotal = 0, wodTotal = 0, hasAny = false;
+        for (const m of months) {
+          const cached = env.TOKENS ? await env.TOKENS.get('poscache:' + m) : null;
+          if (cached) {
+            const d = JSON.parse(cached);
+            total += d.count || 0;
+            albTotal += (d.locations && d.locations.albury) ? d.locations.albury.count : 0;
+            wodTotal += (d.locations && d.locations.wodonga) ? d.locations.wodonga.count : 0;
+            hasAny = true;
+          }
+        }
+        out[source] = hasAny ? { count: total, locations: { albury: { count: albTotal }, wodonga: { count: wodTotal } }, partial: months.some(m => { return true; }) } : null;
+      } catch (e) { out[source] = null; }
+      continue;
+    }
     try {
       const h = makeHelpers(env, source);
       out[source] = await adapter.fetchRange(env, h, q);
