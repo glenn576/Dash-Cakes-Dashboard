@@ -950,16 +950,24 @@ async function sourceStatus(env, source) {
 
 async function fetchSlot(env, q) {
   /* One period slot: pull each configured source; null where unavailable. */
+  /* POS (Square) paginates at 500/call and can exhaust the 50-subrequest free-plan
+     limit for date ranges spanning many months. Skip it for ranges > 60 days — the
+     revenue figures all come from accounting (Xero) and the transaction count over
+     a long period is a minor display metric, not load-bearing. */
+  const daySpan = Math.round((new Date(q.to) - new Date(q.from)) / 86400000);
+  const skipPos = daySpan > 60;
+
   const out = {};
   for (const source of ['accounting', 'pos', 'rostering', 'shopify']) {
     const adapter = ADAPTERS[source];
     if (!adapter || !adapter.configured) { out[source] = null; continue; }
+    if (source === 'pos' && skipPos) { out[source] = null; continue; }
     try {
       const h = makeHelpers(env, source);
       out[source] = await adapter.fetchRange(env, h, q);
       await noteSync(env, source);
     } catch (err) {
-      out[source] = { _error: err.message || String(err) }; /* per-source failure never breaks the whole payload */
+      out[source] = null; /* per-source failure never breaks the whole payload */
     }
   }
   return out;
@@ -1135,19 +1143,6 @@ export default {
         }
       }
       return json(trendData);
-    }
-    if (path === '/api/shopify-debug' && request.method === 'GET') {
-      if (!loggedIn) return json({ error: 'auth' }, 401);
-      const h = makeHelpers(env, 'shopify');
-      const tokens = await h.getTokens();
-      const token = (tokens && tokens.access_token) || env.SHOPIFY_ACCESS_TOKEN;
-      const shop = await env.TOKENS.get('shopify_shop') || env.SHOPIFY_SHOP;
-      const from = url.searchParams.get('from') || '2026-06-01';
-      const to = url.searchParams.get('to') || '2026-06-30';
-      const testUrl = 'https://' + shop + '/admin/api/2024-01/orders.json?status=any&financial_status=paid&created_at_min=' + from + 'T00:00:00%2B10:00&created_at_max=' + to + 'T23:59:59%2B10:00&limit=5&fields=subtotal_price,id,financial_status,status';
-      const res = await fetch(testUrl, { headers: { 'X-Shopify-Access-Token': token } });
-      const body = await res.text();
-      return json({ shop, hasToken: !!token, status: res.status, ok: res.ok, url: testUrl, body: body.slice(0, 2000) });
     }
     return new Response('Not found', { status: 404 });
   },
