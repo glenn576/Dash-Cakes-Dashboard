@@ -952,7 +952,7 @@ async function fetchSlot(env, q) {
       out[source] = await adapter.fetchRange(env, h, q);
       await noteSync(env, source);
     } catch (err) {
-      out[source] = null; /* per-source failure never breaks the whole payload */
+      out[source] = { _error: err.message || String(err) }; /* per-source failure never breaks the whole payload */
     }
   }
   return out;
