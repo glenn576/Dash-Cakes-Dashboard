@@ -261,11 +261,9 @@ body {
   .dash-logo-badge { font-size: 34px; padding: 4px 10px 3px 10px; }
   .topbar-title { font-size: 13px; }
 
-  /* Nav tabs — scroll horizontally, no wrap */
-  .nav { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
-         padding-bottom: 2px; gap: 4px; margin-bottom: 0.8rem; }
-  .nav::-webkit-scrollbar { display: none; }
-  .nav-tab { white-space: nowrap; flex-shrink: 0; font-size: 13px; padding: 7px 14px; }
+  /* Nav tabs — 2×2 grid on mobile, no scroll */
+  .nav { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 0.8rem; }
+  .nav-tab { text-align: center; font-size: 12.5px; padding: 8px 6px; }
 
   /* Period chips — scroll horizontally, no wrap */
   .period-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
@@ -862,7 +860,7 @@ function render() {
   var nav = el('div', 'nav');
   var tabs = isManual()
     ? [ { key: 'dashboard', label: 'Dashboard' }, { key: 'enter', label: 'Enter numbers' }, { key: 'settings', label: 'Settings' } ]
-    : [ { key: 'dashboard', label: 'Dashboard' }, { key: 'connections', label: 'Connections' }, { key: 'recon', label: 'Check your numbers' }, { key: 'settings', label: 'Settings' } ];
+    : [ { key: 'dashboard', label: 'Dashboard' }, { key: 'connections', label: 'Connections' }, { key: 'recon', label: window.innerWidth < 641 ? 'Verify' : 'Check your numbers' }, { key: 'settings', label: 'Settings' } ];
   tabs.forEach(function (t) {
     var b = el('button', 'nav-tab' + (state.view === t.key ? ' active' : ''));
     b.innerHTML = t.label + ((t.key === 'recon' && anyConfiguredSource() && unconfirmedConnectedMetrics().length) ? '<span class="dot"></span>' : '');
@@ -874,13 +872,19 @@ function render() {
   /* Banners */
   if (!isManual() && anyConfiguredSource() && unconfirmedOrgs().length) {
     var ub = el('div', 'banner banner-amber');
-    ub.innerHTML = '<b>New connection.</b> Confirm the connected account is your business on the <span class="banner-link" id="go-conn">Connections screen</span>.';
-    root.appendChild(ub);
+    ub.style.display = 'flex'; ub.style.justifyContent = 'space-between'; ub.style.alignItems = 'flex-start'; ub.style.gap = '12px';
+    var ubt = el('span'); ubt.innerHTML = '<b>New connection.</b> Confirm the connected account is your business on the <span class="banner-link" id="go-conn">Connections screen</span>.';
+    var ubx = el('button'); ubx.textContent = 'Got it'; ubx.style.cssText = 'flex-shrink:0;font-family:Montserrat,sans-serif;font-size:12px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid currentColor;background:transparent;cursor:pointer;color:inherit;';
+    ubx.onclick = function () { SOURCES.forEach(function (s) { var st = srcStatus(s.key); if (st.configured && st.connected) { ORG_OK[s.key] = true; } }); saveOrgOk(); render(); };
+    ub.appendChild(ubt); ub.appendChild(ubx); root.appendChild(ub);
   }
   if (!isManual() && anyConfiguredSource() && unconfirmedConnectedMetrics().length) {
     var b = el('div', 'banner banner-amber');
-    b.innerHTML = '<b>Not verified yet.</b> Before trusting these numbers, check them against your own records on the <span class="banner-link" id="go-recon">Check your numbers screen</span>. Money figures should match your accounting to the cent.';
-    root.appendChild(b);
+    b.style.display = 'flex'; b.style.justifyContent = 'space-between'; b.style.alignItems = 'flex-start'; b.style.gap = '12px';
+    var bt = el('span'); bt.innerHTML = '<b>Not verified yet.</b> Before trusting these numbers, check them against your own records on the <span class="banner-link" id="go-recon">Check your numbers screen</span>. Money figures should match your accounting to the cent.';
+    var bx = el('button'); bx.textContent = 'Got it'; bx.style.cssText = 'flex-shrink:0;font-family:Montserrat,sans-serif;font-size:12px;font-weight:600;padding:4px 10px;border-radius:6px;border:1px solid currentColor;background:transparent;cursor:pointer;color:inherit;';
+    bx.onclick = function () { CHOSEN.forEach(function (k) { if (METRIC_DEFS[k] && METRIC_DEFS[k].needs.every(isConfigured)) { RECON[k] = 'confirmed'; } }); saveRecon(); render(); };
+    b.appendChild(bt); b.appendChild(bx); root.appendChild(b);
   }
   if (!isManual() && anyFlagged()) {
     var fb = el('div', 'banner banner-coral');
