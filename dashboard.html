@@ -167,7 +167,6 @@ body {
 
 .loc-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 14px; margin-bottom: 1.5rem; }
 @media (max-width: 1100px) { .loc-grid { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 560px) { .loc-grid { grid-template-columns: 1fr; } }
 .source-col.combined { background: #f4f0ea; border-color: var(--sage); border-style: solid; }
 .loc-name.combined-name { color: var(--sage); border-bottom-color: var(--sage); }
 .loc-name { font-family: 'Bebas Neue', sans-serif; font-size: 18px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--black); margin-bottom: 0.9rem; padding-bottom: 0.6rem; border-bottom: 2px solid var(--accent); }
@@ -254,9 +253,53 @@ body {
 .fade-in { animation: fadeUp 0.45s cubic-bezier(0.4,0,0.2,1) both; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 640px) {
+  /* App shell */
+  #app { padding: 0 0.9rem 3rem; }
   .venue-name { font-size: 30px; }
   .m-value { font-size: 34px; }
+  .topbar { padding: 1.1rem 0 0.3rem; gap: 0.8rem; }
+  .dash-logo-badge { font-size: 34px; padding: 4px 10px 3px 10px; }
+  .topbar-title { font-size: 13px; }
+
+  /* Nav tabs — scroll horizontally, no wrap */
+  .nav { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+         padding-bottom: 2px; gap: 4px; margin-bottom: 0.8rem; }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-tab { white-space: nowrap; flex-shrink: 0; font-size: 13px; padding: 7px 14px; }
+
+  /* Period chips — scroll horizontally, no wrap */
+  .period-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+                padding-bottom: 6px; gap: 6px; }
+  .period-bar::-webkit-scrollbar { display: none; }
+  .period-label { flex-shrink: 0; }
+  .pchip { white-space: nowrap; flex-shrink: 0; }
+
+  /* Location grid — single column, Both Stores first */
+  .loc-grid { grid-template-columns: 1fr; }
+  .source-col.combined { order: -1; }
+
+  /* Individual store columns hidden by default on mobile */
+  .loc-grid.stores-hidden .source-col:not(.combined) { display: none; }
+
+  /* Store toggle button */
+  .stores-toggle { display: flex; }
 }
+
+/* Hide toggle button on desktop */
+@media (min-width: 641px) {
+  .stores-toggle { display: none !important; }
+}
+
+/* Toggle button styling (shared) */
+.stores-toggle {
+  width: 100%; justify-content: center; align-items: center; gap: 6px;
+  margin-bottom: 1rem; padding: 10px 16px;
+  font-family: 'Montserrat', sans-serif; font-size: 13px; font-weight: 600;
+  color: var(--sage); background: transparent;
+  border: 1.5px solid var(--sage); border-radius: 10px; cursor: pointer;
+  letter-spacing: 0.03em;
+}
+.stores-toggle:hover { background: var(--accent-dim); }
 /* ---- §1 dashboard upgrade: dual headline, meters, trend bars ---- */
 .m-figs { display: flex; align-items: flex-end; gap: 1.6rem; flex-wrap: wrap; margin-bottom: 0.15rem; }
 .m-fig { display: flex; flex-direction: column; }
@@ -988,12 +1031,27 @@ function renderLocationGrid(root, r) {
   var curW = periodLocationValues('cur', 'wodonga'), prevW = periodLocationValues('prev', 'wodonga');
   var curS = periodShopifyValues('cur'),  prevS = periodShopifyValues('prev');
   var curC  = periodCombinedValues('cur'),  prevC  = periodCombinedValues('prev');
-  var grid = el('div', 'loc-grid');
+  /* On mobile, start with individual stores hidden (Both Stores shows first via CSS order) */
+  var mobile = window.innerWidth < 641;
+  var grid = el('div', mobile ? 'loc-grid stores-hidden' : 'loc-grid');
   grid.appendChild(locationCol('Albury',  curA, prevA, r, accConf, posConf, false));
   grid.appendChild(locationCol('Wodonga', curW, prevW, r, accConf, posConf, false));
   grid.appendChild(shopifyCol('Online', curS, prevS, r));
   grid.appendChild(locationCol('Both stores', curC, prevC, r, accConf, posConf, true));
   root.appendChild(grid);
+  /* Toggle button (CSS hides it on desktop) */
+  var tog = el('button', 'stores-toggle');
+  tog.textContent = '▼  View by store';
+  tog.onclick = function () {
+    if (grid.classList.contains('stores-hidden')) {
+      grid.classList.remove('stores-hidden');
+      tog.textContent = '▲  Hide individual stores';
+    } else {
+      grid.classList.add('stores-hidden');
+      tog.textContent = '▼  View by store';
+    }
+  };
+  root.appendChild(tog);
 }
 
 function locationCol(label, cur, prev, r, accConf, posConf, isCombined) {
